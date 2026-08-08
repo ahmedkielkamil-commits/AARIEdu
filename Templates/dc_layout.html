@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}{{ course.name if course else 'Data Center' }} · AARI{% endblock %}
+
+{% block body %}
+<div class="dc-shell">
+  <nav class="course-rail" aria-label="Your division track">
+    <a href="{{ url_for('dc_home') }}" class="course-monogram rail-home" title="Home">A</a>
+    {% if course %}
+      <a href="{{ url_for('dc_home') }}"
+         class="course-monogram active"
+         title="{{ course.name }}">{{ monogram(course.name) }}</a>
+    {% endif %}
+  </nav>
+
+  <aside class="course-sidebar">
+    <div class="sidebar-course-title">{{ course.name if course else 'Data Center' }}</div>
+    {% if user_is_dc_admin and all_courses %}
+    <form method="get" action="{{ url_for('dc_home') }}" class="sidebar-course-picker">
+      <label for="dc-courseid" class="sr-only">Division track</label>
+      <select id="dc-courseid" name="courseid" onchange="this.form.submit()">
+        {% for c in all_courses %}
+          <option value="{{ c.courseid }}" {% if courseid == c.courseid %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
+    <nav class="sidebar-nav">
+      <a href="{{ url_for('dc_home') }}"
+         class="{% if sidebar_active == 'content' %}active{% endif %}">Course Content</a>
+      <a href="{{ url_for('dc_assignments') }}"
+         class="{% if sidebar_active == 'assignments' %}active{% endif %}">Assignments</a>
+      <a href="{{ url_for('dc_grades') }}"
+         class="{% if sidebar_active == 'grades' %}active{% endif %}">Grades</a>
+      <a href="{{ url_for('dc_progress') }}"
+         class="{% if sidebar_active == 'progress' %}active{% endif %}">Progress</a>
+      <a href="{{ url_for('dc_messenger') }}"
+         class="{% if sidebar_active == 'messenger' %}active{% endif %}">Messenger</a>
+      <a href="{{ url_for('dc_roster') }}"
+         class="{% if sidebar_active == 'roster' %}active{% endif %}">Roster</a>
+      <a href="{{ url_for('dc_about') }}"
+         class="{% if sidebar_active == 'about' %}active{% endif %}">About</a>
+      <a href="{{ url_for('dc_calls') }}"
+         class="{% if sidebar_active == 'calls' %}active{% endif %}">Call Access</a>
+      {% if user_is_dc_admin %}
+        <hr class="sidebar-divider">
+        <a href="{{ url_for('dc_admin_weeks') }}"
+           class="{% if sidebar_active == 'admin_weeks' %}active{% endif %}">Manage weeks</a>
+        <a href="{{ url_for('dc_admin_analytics') }}"
+           class="{% if sidebar_active == 'admin_analytics' %}active{% endif %}">Analytics</a>
+        <a href="{{ url_for('dc_admin_students') }}"
+           class="{% if sidebar_active == 'admin_students' %}active{% endif %}">Manage students</a>
+      {% endif %}
+    </nav>
+  </aside>
+
+  <div class="dc-main-wrap">
+    <header class="course-topbar">
+      <span class="topbar-user">
+        {% if current_user_name %}{{ current_user_name }}{% endif %}
+        {% if user_is_dc_admin %}<span class="badge">Admin</span>{% endif %}
+        {% if cohort %}<span class="badge">{{ cohort.name }}</span>{% endif %}
+      </span>
+      <span>
+        <a href="{{ url_for('dc_account') }}">Account</a>
+        ·
+        <a href="{{ url_for('logout') }}">Log out</a>
+      </span>
+    </header>
+
+    <div class="dc-body">
+      <main class="dc-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="alert alert-{{ 'error' if category == 'error' else 'success' }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        <div class="course-header">
+          <h1>{% block page_heading %}{{ course.name if course else 'Data Center' }}{% endblock %}</h1>
+          {% if progress_pct is defined and not user_is_dc_admin %}
+            <div class="progress-bar" role="progressbar"
+                 aria-valuenow="{{ progress_pct }}" aria-valuemin="0" aria-valuemax="100">
+              <div class="progress-fill" style="width: {{ progress_pct }}%;"></div>
+            </div>
+            <div class="progress-label">Course completion · {{ progress_pct }}%</div>
+          {% endif %}
+        </div>
+
+        {% block dc_content %}{% endblock %}
+      </main>
+
+      {% block dc_right_rail %}{% endblock %}
+    </div>
+  </div>
+</div>
+{% endblock %}

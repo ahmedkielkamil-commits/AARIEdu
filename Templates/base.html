@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}AARI Educational Suite{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="{% if overlay_color == 'maroon' %}overlay-maroon{% elif overlay_color == 'slate' %}overlay-slate{% endif %}">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-container" style="max-width:880px;margin:1rem auto;padding:0 1rem;">
+        {% for category, message in messages %}
+          <div class="alert alert-{{ 'error' if category == 'error' else 'success' }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+  {% block body %}{% endblock %}
+</body>
+</html>

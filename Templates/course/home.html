@@ -1,0 +1,17 @@
+{% extends "robotics_layout.html" %}
+
+{% block page_heading %}Home{% endblock %}
+
+{% block course_content %}
+<h2>Announcements</h2>
+{% if announcements %}
+  {% for a in announcements %}
+    <article class="card">
+      <div class="card-meta">{{ a.created_at | format_datetime }}</div>
+      <p style="margin:0; white-space: pre-wrap;">{{ a.content }}</p>
+    </article>
+  {% endfor %}
+{% else %}
+  <p class="empty-state">No announcements yet.</p>
+{% endif %}
+{% endblock %}

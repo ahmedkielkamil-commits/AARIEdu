@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}{{ course.title }} · AARI Robotics{% endblock %}
+
+{% block body %}
+<div class="course-shell">
+  <nav class="course-rail" aria-label="Your courses">
+    <a href="{{ url_for('student_home') if not user_is_instructor else url_for('course_home', courseid=courseid) }}"
+       class="course-monogram rail-home" title="Home">A</a>
+    {% for c in enrolled_courses %}
+      <a href="{{ url_for('course_home', courseid=c.courseid) }}"
+         class="course-monogram {% if c.courseid == courseid %}active{% endif %}"
+         title="{{ c.title }}">{{ monogram(c.title) }}</a>
+    {% endfor %}
+  </nav>
+
+  <aside class="course-sidebar">
+    <div class="sidebar-course-title">{{ course.title }}</div>
+    <nav class="sidebar-nav">
+      <a href="{{ url_for('course_home', courseid=courseid) }}"
+         class="{% if sidebar_active == 'home' %}active{% endif %}">Home</a>
+      <a href="{{ url_for('course_announcements', courseid=courseid) }}"
+         class="{% if sidebar_active == 'announcements' %}active{% endif %}">Announcements</a>
+      <a href="{{ url_for('course_syllabus', courseid=courseid) }}"
+         class="{% if sidebar_active == 'syllabus' %}active{% endif %}">Syllabus</a>
+      <a href="{{ url_for('course_modules', courseid=courseid) }}"
+         class="{% if sidebar_active == 'modules' %}active{% endif %}">Modules</a>
+      <a href="{{ url_for('course_instructor', courseid=courseid) }}"
+         class="{% if sidebar_active == 'instructor' %}active{% endif %}">Instructor</a>
+      {% if is_instructor %}
+        <a href="{{ url_for('course_roster', courseid=courseid) }}"
+           class="{% if sidebar_active == 'roster' %}active{% endif %}">Roster</a>
+      {% endif %}
+    </nav>
+  </aside>
+
+  <div class="course-main">
+    <header class="course-topbar">
+      <span class="topbar-user">
+        {% if current_user_name %}{{ current_user_name }}{% endif %}
+        {% if user_is_instructor %}<span class="badge">Instructor</span>{% endif %}
+      </span>
+      <span>
+        <a href="{{ url_for('account') }}">Account</a>
+        ·
+        <a href="{{ url_for('logout') }}">Log out</a>
+      </span>
+    </header>
+
+    <main class="course-content">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="alert alert-{{ 'error' if category == 'error' else 'success' }}">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      <div class="course-header">
+        <h1>{% block page_heading %}{{ course.title }}{% endblock %}</h1>
+        {% if not user_is_instructor %}
+          <div class="progress-bar" role="progressbar" aria-valuenow="{{ progress_pct }}" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-fill" style="width: {{ progress_pct }}%;"></div>
+          </div>
+          <div class="progress-label">Exit ticket progress · {{ progress_pct }}% (by lecture day)</div>
+        {% endif %}
+      </div>
+      {% block course_content %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% endblock %}

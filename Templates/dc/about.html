@@ -1,0 +1,50 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}About the Program{% endblock %}
+
+{% block dc_content %}
+<section class="card">
+  <h2>The Community Cloud</h2>
+  <p>
+    The AARI Data Center program prepares Atlanta-area learners for careers in modern
+    data-center operations — from network security and facilities to remote hands and
+    systems monitoring. Cohort members work asynchronously through weekly video modules
+    while staying connected through division channels and cohort-wide discussion.
+  </p>
+</section>
+
+<section class="card">
+  <h2>The Cohort System</h2>
+  <p>
+    You are placed in a regional cohort that moves through the program together.
+    Each cohort has a general channel for announcements and community, plus division-specific
+    channels where you collaborate with peers on your track. Instructors and admins review
+    your hands-on lab submissions and provide written feedback.
+  </p>
+  {% if cohort %}
+    <p><strong>Your cohort:</strong> {{ cohort.name }} ({{ cohort.region }})</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>The Four Divisions</h2>
+  <p>Every student is assigned to one of four division tracks for the duration of the program:</p>
+  <ul class="division-list">
+    {% for c in all_courses %}
+      <li>
+        <strong>{{ c.name }}</strong>
+        {% if course and c.courseid == course.courseid %}<span class="badge badge-success">Your track</span>{% endif %}
+        <p class="division-desc">{{ c.description }}</p>
+        <p class="card-meta">Lead instructor: {{ c.teacher }}</p>
+      </li>
+    {% endfor %}
+  </ul>
+  <section class="card" style="margin-top: 1rem;">
+    <h3>Track overview</h3>
+    <p><strong>Network Security</strong> — OSI, subnets, firewalls, NFS, spine-leaf (Weeks 1–6).</p>
+    <p><strong>Data Center Orchestration</strong> — C++, binary/bitmasking, virtualization, Express monitoring dashboard (Weeks 1–6).</p>
+    <p><strong>Cloud Architect</strong> — JavaScript, Flask, MySQL, AI/RAG chatbot, Docker cloud deploy, community-cloud proposal (Weeks 1–6).</p>
+    <p><strong>Energy</strong> — racks, power, cooling, airflow, sustainability, facilities capstone (Weeks 1–6).</p>
+  </section>
+</section>
+{% endblock %}

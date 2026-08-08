@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}AARI Educational Suite{% endblock %}
+
+{% block body %}
+<div class="public-page">
+  <header class="public-header">
+    <span class="brand">AARI Educational Suite</span>
+    <nav>
+      {% if is_logged_in %}
+        {% if session.get('suite') == 'dc' %}
+        <a href="{{ url_for('dc_home') }}">Data Center</a>
+        {% else %}
+        <a href="{{ url_for('student_home') }}">My courses</a>
+        {% endif %}
+        ·
+        <a href="{{ url_for('logout') }}">Log out</a>
+      {% else %}
+        <a href="{{ url_for('login') }}">Log in</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main class="public-main">
+    <section class="hero">
+      <h1>Atlanta Academic Robotics Initiative</h1>
+      <p>Hands-on STEM education for youth and career training for adult learners — two programs, one mission.</p>
+    </section>
+    <div class="entry-cards">
+      <a href="{{ url_for('login', next=url_for('student_home')) }}" class="entry-card">
+        <h2>Robotics Courses</h2>
+        <p>16-week applied mathematics and coding fundamentals plus hands-on robot building for Boys &amp; Girls Club students. Weekly modules, announcements, and exit tickets.</p>
+      </a>
+      <a href="{{ url_for('datacenter_entry') }}" class="entry-card">
+        <h2>Data Center Courses</h2>
+        <p>Asynchronous cohort training for data-center careers — video lessons, division tracks, graded labs, and cohort chat.</p>
+      </a>
+    </div>
+  </main>
+</div>
+{% endblock %}

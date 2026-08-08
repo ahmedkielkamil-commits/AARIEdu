@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block title %}Messenger · AARI Data Center{% endblock %}
+
+{% block body %}
+<div class="dc-shell dc-messenger-shell">
+  <nav class="course-rail" aria-label="Your division track">
+    <a href="{{ url_for('dc_home') }}" class="course-monogram rail-home" title="Home">A</a>
+    {% if course %}
+      <a href="{{ url_for('dc_home') }}" class="course-monogram active" title="{{ course.name }}">{{ monogram(course.name) }}</a>
+    {% endif %}
+  </nav>
+
+  <aside class="messenger-channels">
+    <div class="messenger-channels-header">
+      <h2>Messenger</h2>
+      <a href="{{ url_for('dc_messenger') }}" class="btn btn-sm btn-secondary">Refresh</a>
+    </div>
+
+    <p class="messenger-help">General is your whole cohort. Division is your track group. Direct is 1:1.</p>
+
+    <nav class="channel-list">
+      {% if channel_groups.general %}
+        <div class="channel-section-label">General · whole cohort</div>
+        <a href="{{ url_for('dc_messenger', channelid=channel_groups.general.channelid) }}"
+           class="channel-link {% if active_channel and active_channel.channelid == channel_groups.general.channelid %}active{% endif %}">
+          <span class="channel-type">cohort</span>
+          <span class="channel-name">{{ channel_groups.general.display_name }}</span>
+        </a>
+      {% endif %}
+
+      {% if channel_groups.division %}
+        <div class="channel-section-label">Division · track group</div>
+        {% for ch in channel_groups.division %}
+          <a href="{{ url_for('dc_messenger', channelid=ch.channelid) }}"
+             class="channel-link {% if active_channel and active_channel.channelid == ch.channelid %}active{% endif %}">
+            <span class="channel-type">division</span>
+            <span class="channel-name">{{ ch.display_name }}</span>
+          </a>
+        {% endfor %}
+      {% endif %}
+
+      {% if channel_groups.direct %}
+        <div class="channel-section-label">Direct messages</div>
+        {% for ch in channel_groups.direct %}
+          <a href="{{ url_for('dc_messenger', channelid=ch.channelid) }}"
+             class="channel-link {% if active_channel and active_channel.channelid == ch.channelid %}active{% endif %}">
+            <span class="channel-type">direct</span>
+            <span class="channel-name">{{ ch.display_name }}</span>
+          </a>
+        {% endfor %}
+      {% endif %}
+    </nav>
+
+    {% if cohort_contacts %}
+      <div class="messenger-new-dm">
+        <h3>New direct message</h3>
+        <form method="post" action="{{ url_for('dc_messenger_start_dm') }}" class="inline-form">
+          <div class="form-group">
+            <label for="peer_id">Message someone in your cohort</label>
+            <select id="peer_id" name="peer_id" required>
+              <option value="">Choose a person…</option>
+              {% for contact in cohort_contacts %}
+                <option value="{{ contact.member_id }}" data-type="{{ contact.member_type }}">
+                  {{ contact.name }} · {{ contact.division_name }}
+                </option>
+              {% endfor %}
+            </select>
+            <input type="hidden" name="peer_type" id="peer_type" value="">
+          </div>
+          <button type="submit" class="btn btn-sm btn-primary">Open chat</button>
+        </form>
+      </div>
+    {% endif %}
+
+    {# TODO: real-time websockets for live chat — server-rendered reload for now #}
+  </aside>
+
+  <div class="messenger-main">
+    <header class="course-topbar">
+      <span class="topbar-user">
+        {% if current_user_name %}{{ current_user_name }}{% endif %}
+        {% if active_channel %}
+          · {{ active_channel.display_name or active_channel.name or 'Direct message' }}
+          {% if active_channel.type == 'general' %}
+            <span class="badge">whole cohort</span>
+          {% elif active_channel.type == 'division' %}
+            <span class="badge">division</span>
+          {% elif active_channel.type == 'direct' %}
+            <span class="badge">direct</span>
+          {% endif %}
+        {% endif %}
+      </span>
+      <span>
+        <a href="{{ url_for('dc_home') }}">Back to course</a>
+        ·
+        <a href="{{ url_for('logout') }}">Log out</a>
+      </span>
+    </header>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="messenger-flashes">
+          {% for category, message in messages %}
+            <div class="alert alert-{{ 'error' if category == 'error' else 'success' }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% if active_channel %}
+      <div class="messenger-body">
+        <div class="messenger-messages" id="messages">
+          {% for msg in messages|reverse %}
+            <article class="message {% if msg.sender_type == member_type and msg.sender_id == member_id %}message-own{% endif %}">
+              <div class="message-meta">
+                <strong>{{ msg.sender_name or 'Unknown' }}</strong>
+                <span>{{ msg.sendtime | format_datetime }}</span>
+              </div>
+              <p class="message-body">{{ msg.content }}</p>
+              {% if user_is_dc_admin %}
+                <form method="post" action="{{ url_for('dc_messenger_delete', channelid=active_channel.channelid) }}" class="message-delete-form">
+                  <input type="hidden" name="messagesid" value="{{ msg.messagesid }}">
+                  <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                </form>
+              {% endif %}
+            </article>
+          {% else %}
+            <p class="empty-state">No messages yet. Say hello!</p>
+          {% endfor %}
+        </div>
+
+        <form method="post" class="messenger-compose">
+          <div class="form-group" style="margin-bottom: 0; flex: 1;">
+            <label for="content" class="sr-only">Message</label>
+            <textarea id="content" name="content" rows="2" required placeholder="Write a message…"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary">Send</button>
+        </form>
+      </div>
+
+      <aside class="messenger-members">
+        <h3>
+          {% if active_channel.type == 'general' %}
+            Cohort members
+          {% elif active_channel.type == 'division' %}
+            Division members
+          {% else %}
+            Conversation
+          {% endif %}
+        </h3>
+        <ul class="member-list">
+          {% for m in channel_members %}
+            <li>
+              <span class="badge">{{ m.member_type }}</span>
+              {{ m.member_name or 'Unknown' }}
+              {% if m.division_name %}
+                <span class="card-meta"> · {{ m.division_name }}</span>
+              {% endif %}
+              {% if active_channel.type != 'direct' and not (m.member_type == member_type and m.member_id == member_id) %}
+                <form method="post" action="{{ url_for('dc_messenger_start_dm') }}" class="member-dm-form">
+                  <input type="hidden" name="peer_type" value="{{ m.member_type }}">
+                  <input type="hidden" name="peer_id" value="{{ m.member_id }}">
+                  <button type="submit" class="btn btn-sm btn-secondary">DM</button>
+                </form>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </aside>
+    {% else %}
+      <div class="messenger-empty">
+        <p class="empty-state">Select <strong>General</strong> to talk with your whole cohort, your <strong>Division</strong> track group, or start a <strong>Direct</strong> message with one person.</p>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+  (function () {
+    var select = document.getElementById('peer_id');
+    var typeInput = document.getElementById('peer_type');
+    if (!select || !typeInput) return;
+    select.addEventListener('change', function () {
+      var opt = select.options[select.selectedIndex];
+      typeInput.value = opt ? (opt.getAttribute('data-type') || '') : '';
+    });
+  })();
+</script>
+{% endblock %}

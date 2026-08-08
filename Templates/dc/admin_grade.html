@@ -1,0 +1,44 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Grade submissions{% endblock %}
+
+{% block dc_content %}
+<p class="card-meta">{{ video.title }}</p>
+
+{% if submissions %}
+  {% for s in submissions %}
+    <article class="card">
+      <h3>{{ s.fname }} {{ s.lname }}</h3>
+      <p class="card-meta">{{ s.email }} · {{ s.submitted_at | format_datetime }}</p>
+      <p class="card-meta">File: {{ s.miniokey }}</p>
+      <p>
+        <span class="badge {% if s.status == 'satisfactory' %}badge-success{% elif s.status == 'unsatisfactory' %}badge-warning{% endif %}">
+          {{ s.status }}
+        </span>
+      </p>
+      {% if s.feedback %}
+        <p style="white-space: pre-wrap;">{{ s.feedback }}</p>
+      {% endif %}
+      <form method="post" class="card" style="margin-top: 0.75rem;">
+        <input type="hidden" name="assignmentid" value="{{ s.assignmentid }}">
+        <div class="form-group">
+          <label>Status</label>
+          <select name="status" required>
+            <option value="satisfactory" {% if s.status == 'satisfactory' %}selected{% endif %}>satisfactory</option>
+            <option value="unsatisfactory" {% if s.status == 'unsatisfactory' %}selected{% endif %}>unsatisfactory</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Feedback</label>
+          <textarea name="feedback" placeholder="Written commentary for the student…">{{ s.feedback or '' }}</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Save grade</button>
+      </form>
+    </article>
+  {% endfor %}
+{% else %}
+  <p class="empty-state">No submissions for this video yet.</p>
+{% endif %}
+
+<p style="margin-top: 1rem;"><a href="{{ url_for('dc_video', videoid=video.videoid) }}">← View lesson</a></p>
+{% endblock %}

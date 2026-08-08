@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}No courses · AARI{% endblock %}
+
+{% block body %}
+<div class="public-page">
+  <header class="public-header">
+    <a href="{{ url_for('landing') }}" class="brand">AARI Educational Suite</a>
+  </header>
+  <main class="public-main">
+    <h1>No enrollments yet</h1>
+    <p style="color: var(--text-muted);">You are not enrolled in any robotics courses. Ask your instructor to add you to a class.</p>
+    <p><a href="{{ url_for('account') }}">Account</a> · <a href="{{ url_for('logout') }}">Log out</a></p>
+  </main>
+</div>
+{% endblock %}

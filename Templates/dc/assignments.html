@@ -1,0 +1,45 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Assignments{% endblock %}
+
+{% block dc_content %}
+<p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+  {% if admin_assignments_view %}
+    All lab submissions for {{ course.name }} in your cohort — grade pending items from the lesson or analytics pages.
+  {% else %}
+    Performance reviews and written feedback on your graded lab submissions.
+  {% endif %}
+</p>
+
+{% if assignments %}
+  {% for a in assignments %}
+    <article class="card">
+      <div class="card-meta">
+        Week {{ a.week_num }} · Day {{ a.day_num }} · {{ a.video_title }}
+        {% if admin_assignments_view %}
+          · {{ a.fname }} {{ a.lname }}
+        {% endif %}
+      </div>
+      <p style="margin-bottom: 0.5rem;">
+        <span class="badge {% if a.status == 'satisfactory' %}badge-success{% elif a.status == 'unsatisfactory' %}badge-warning{% endif %}">
+          {{ a.status }}
+        </span>
+        <span class="card-meta" style="margin-left: 0.5rem;">{{ a.submitted_at | format_datetime }}</span>
+      </p>
+      {% if a.feedback %}
+        <p style="margin: 0; white-space: pre-wrap;"><strong>Feedback:</strong> {{ a.feedback }}</p>
+      {% elif a.status == 'submitted' %}
+        <p class="instructor-placeholder" style="margin: 0;">Submitted — awaiting review.</p>
+      {% endif %}
+      <p style="margin: 0.75rem 0 0;">
+        <a href="{{ url_for('dc_video', videoid=a.videoid) }}">View lesson →</a>
+        {% if admin_assignments_view and a.status == 'submitted' %}
+          · <a href="{{ url_for('dc_admin_grade_video', videoid=a.videoid) }}">Grade →</a>
+        {% endif %}
+      </p>
+    </article>
+  {% endfor %}
+{% else %}
+  <p class="empty-state">No submissions yet. Complete a hands-on lab to submit your first assignment.</p>
+{% endif %}
+{% endblock %}

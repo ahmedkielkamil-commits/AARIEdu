@@ -1,0 +1,36 @@
+{% extends "robotics_layout.html" %}
+
+{% block page_heading %}Announcements{% endblock %}
+
+{% block course_content %}
+{% if is_instructor %}
+<div class="teacher-panel">
+  <h3>Post announcement</h3>
+  <form method="post">
+    <input type="hidden" name="action" value="create">
+    <div class="form-group">
+      <textarea name="content" rows="4" required placeholder="Write an announcement for your class…"></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Post</button>
+  </form>
+</div>
+{% endif %}
+
+{% if announcements %}
+  {% for a in announcements %}
+    <article class="card">
+      <div class="card-meta">{{ a.created_at | format_datetime }}</div>
+      <p style="margin:0; white-space: pre-wrap;">{{ a.content }}</p>
+      {% if is_instructor %}
+        <form method="post" style="margin-top:0.75rem;" onsubmit="return confirm('Delete this announcement?');">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="announceid" value="{{ a.announceid }}">
+          <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+        </form>
+      {% endif %}
+    </article>
+  {% endfor %}
+{% else %}
+  <p class="empty-state">No announcements yet.</p>
+{% endif %}
+{% endblock %}

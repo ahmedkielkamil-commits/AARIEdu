@@ -1,0 +1,87 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}{{ video.title }}{% endblock %}
+
+{% block dc_right_rail %}
+{% include "dc/_lesson_rail.html" %}
+{% endblock %}
+
+{% block dc_content %}
+<div class="video-placeholder" aria-label="Video player placeholder">
+  <span>VIDEO PLACEHOLDER</span>
+  <p class="video-placeholder-note">Streaming via MinIO — not wired yet (TODO)</p>
+</div>
+
+<p class="card-meta">Week {{ week.num }} · Day {{ video.day }} · Taught by {{ course.teacher }}</p>
+
+{% if user_is_dc_admin %}
+<p style="margin-bottom: 1rem;">
+  <a href="{{ url_for('dc_admin_weeks', courseid=courseid) }}" class="btn btn-secondary btn-sm">Edit weeks &amp; videos</a>
+</p>
+{% endif %}
+
+{% if video.reflection %}
+<div class="card instructor-reflection">
+  <h2>Reflection on the assignment</h2>
+  <p style="white-space: pre-wrap; margin: 0;">{{ video.reflection }}</p>
+  <p class="card-meta" style="margin-top: 0.75rem;">From your instructor — read before you submit.</p>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>What to submit</h2>
+  <p style="white-space: pre-wrap; margin: 0;">{{ video.instructions }}</p>
+</div>
+
+<div class="card">
+  <h2>Script</h2>
+  <p style="white-space: pre-wrap; margin: 0; color: var(--text-muted); font-size: 0.95rem;">{{ video.script }}</p>
+</div>
+
+{% if not user_is_dc_admin %}
+<form method="post" class="inline-form" style="margin-bottom: 1.5rem;">
+  <input type="hidden" name="action" value="mark_watched">
+  <button type="submit" class="btn btn-secondary btn-sm"
+          {% if progress and progress.watched %}disabled{% endif %}>
+    {% if progress and progress.watched %}Marked complete{% else %}Mark complete{% endif %}
+  </button>
+</form>
+{% endif %}
+
+<section class="exit-ticket-box">
+  <h3>Assignment submission</h3>
+  {% if assignment %}
+    <p class="card-meta">Submitted {{ assignment.submitted_at | format_datetime }}</p>
+    <p>
+      <span class="badge {% if assignment.status == 'satisfactory' %}badge-success{% elif assignment.status == 'unsatisfactory' %}badge-warning{% endif %}">
+        {{ assignment.status }}
+      </span>
+    </p>
+    {% if assignment.feedback %}
+      <div class="card" style="margin-top: 0.75rem;">
+        <strong>Instructor feedback</strong>
+        <p style="margin: 0.35rem 0 0; white-space: pre-wrap;">{{ assignment.feedback }}</p>
+      </div>
+    {% elif assignment.status == 'submitted' %}
+      <p class="instructor-placeholder">Awaiting review.</p>
+    {% endif %}
+    <p class="card-meta">File key: {{ assignment.miniokey }}</p>
+  {% elif not user_is_dc_admin %}
+    <p class="exit-ticket-note">
+      Upload your deliverable for this lesson. Enter a placeholder object key for now —
+      real MinIO upload is a later enhancement.
+    </p>
+    <form method="post">
+      <input type="hidden" name="action" value="submit_assignment">
+      <div class="form-group">
+        <label for="miniokey">Submission key (placeholder)</label>
+        <input type="text" id="miniokey" name="miniokey" required
+               placeholder="submissions/student-{{ current_user['studentid'] }}/file.pdf">
+      </div>
+      <button type="submit" class="btn btn-primary">Submit assignment</button>
+    </form>
+  {% else %}
+    <p><a href="{{ url_for('dc_admin_grade_video', videoid=video.videoid) }}">Grade submissions for this video →</a></p>
+  {% endif %}
+</section>
+{% endblock %}

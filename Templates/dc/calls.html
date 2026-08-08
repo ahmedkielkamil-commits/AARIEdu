@@ -1,0 +1,24 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Call Access{% endblock %}
+
+{% block dc_content %}
+<section class="card">
+  <h2>Cohort video call</h2>
+  <p>
+    Join your cohort's shared call room for live Q&amp;A sessions and group check-ins.
+    Room name is scoped to your cohort{% if course %} and division{% endif %}.
+  </p>
+  <p class="card-meta">Room: <code>{{ jitsi_room }}</code></p>
+
+  {# TODO: embed self-hosted Jitsi when available; external placeholder for now #}
+  <div class="video-placeholder" style="min-height: 200px; margin: 1rem 0;">
+    <span>JITSI PLACEHOLDER</span>
+    <p class="video-placeholder-note">Self-hosted Jitsi not configured yet</p>
+  </div>
+
+  <a href="{{ jitsi_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+    Join cohort call (external)
+  </a>
+</section>
+{% endblock %}

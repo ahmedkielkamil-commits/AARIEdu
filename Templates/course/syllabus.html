@@ -1,0 +1,23 @@
+{% extends "robotics_layout.html" %}
+
+{% block page_heading %}Syllabus{% endblock %}
+
+{% block course_content %}
+{% if is_instructor %}
+<div class="teacher-panel">
+  <h3>Edit syllabus</h3>
+  <form method="post">
+    <div class="form-group">
+      <textarea name="syllabus" rows="8" required>{{ syllabus_data.syllabus if syllabus_data else '' }}</textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Save syllabus</button>
+  </form>
+</div>
+{% endif %}
+
+{% if syllabus_data %}
+  <div class="syllabus-text">{{ syllabus_data.syllabus }}</div>
+{% else %}
+  <p class="empty-state">Syllabus not available.</p>
+{% endif %}
+{% endblock %}

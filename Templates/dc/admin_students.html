@@ -1,0 +1,97 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Manage students{% endblock %}
+
+{% block dc_content %}
+<p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+  Students in <strong>{{ cohort.name }}</strong> ({{ cohort.region }}). New accounts are added to your cohort automatically.
+</p>
+
+<section class="teacher-panel">
+  <h3>Create student</h3>
+  <form method="post">
+    <input type="hidden" name="action" value="create_student">
+    <div class="inline-form">
+      <div class="form-group">
+        <label>First name</label>
+        <input type="text" name="fname" required>
+      </div>
+      <div class="form-group">
+        <label>Last name</label>
+        <input type="text" name="lname" required>
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" name="email" required>
+      </div>
+      <div class="form-group">
+        <label>Initial password</label>
+        <input type="password" name="password" required>
+      </div>
+      <div class="form-group">
+        <label>Division</label>
+        <select name="courseid" required>
+          {% for c in all_courses %}
+            <option value="{{ c.courseid }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Bio (optional)</label>
+      <textarea name="bio"></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Create student</button>
+  </form>
+</section>
+
+<h2>Students in your cohort</h2>
+{% if students %}
+<div class="table-wrap card" style="padding:0; overflow:hidden;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Division</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in students %}
+        <tr>
+          <td>{{ s.studentid }}</td>
+          <td>{{ s.fname }} {{ s.lname }}</td>
+          <td>{{ s.email }}</td>
+          <td>{{ s.division_name }}</td>
+          <td>
+            <form method="post" style="display:inline;" onsubmit="return confirm('Remove this student permanently?');">
+              <input type="hidden" name="action" value="delete_student">
+              <input type="hidden" name="studentid" value="{{ s.studentid }}">
+              <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+  <p class="empty-state">No students in your cohort yet.</p>
+{% endif %}
+
+<h2 style="margin-top: 1.5rem;">Reset password</h2>
+<form method="post" class="inline-form">
+  <input type="hidden" name="action" value="reset_password">
+  <div class="form-group">
+    <label>Student ID</label>
+    <input type="number" name="studentid" required min="1">
+  </div>
+  <div class="form-group">
+    <label>New password</label>
+    <input type="password" name="new_password" required>
+  </div>
+  <button type="submit" class="btn btn-secondary btn-sm">Reset</button>
+</form>
+{% endblock %}

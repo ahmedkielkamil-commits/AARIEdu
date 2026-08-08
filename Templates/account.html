@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Account · AARI{% endblock %}
+
+{% block body %}
+<div class="public-page">
+  <header class="public-header">
+    <a href="{{ url_for('landing') }}" class="brand">AARI Educational Suite</a>
+    <nav>
+      <a href="{{ url_for('student_home') }}">My courses</a>
+      ·
+      <a href="{{ url_for('logout') }}">Log out</a>
+    </nav>
+  </header>
+  <main class="public-main">
+    <h1>Account settings</h1>
+
+    {% if profile and not user_is_instructor %}
+    <div class="card" style="max-width: 520px;">
+      <h2>Profile</h2>
+      <form method="post">
+        <input type="hidden" name="action" value="profile">
+        <div class="form-group">
+          <label for="fname">First name</label>
+          <input type="text" id="fname" name="fname" value="{{ profile.fname }}" required>
+        </div>
+        <div class="form-group">
+          <label for="lname">Last name</label>
+          <input type="text" id="lname" name="lname" value="{{ profile.lname }}" required>
+        </div>
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" value="{{ profile.email }}" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Save profile</button>
+      </form>
+    </div>
+    {% elif user_is_instructor %}
+    <div class="card" style="max-width: 520px;">
+      <p>Signed in as <strong>{{ profile.fname }} {{ profile.lname }}</strong> ({{ profile.email }}).</p>
+      <p class="instructor-placeholder">Instructor profile editing is not available yet.</p>
+    </div>
+    {% endif %}
+
+    <div class="card" style="max-width: 520px; margin-top: 1.25rem;">
+      <h2>Display preference</h2>
+      <p style="color: var(--text-muted); font-size: 0.95rem;">Overlay tint on the page background (stored in your session).</p>
+      <form method="post">
+        <input type="hidden" name="action" value="overlay">
+        <div class="toggle-group">
+          <label class="toggle-option">
+            <input type="radio" name="overlay_color" value="maroon" {% if overlay_color == 'maroon' %}checked{% endif %}>
+            Warm maroon
+          </label>
+          <label class="toggle-option">
+            <input type="radio" name="overlay_color" value="slate" {% if overlay_color == 'slate' %}checked{% endif %}>
+            Soft slate
+          </label>
+          <label class="toggle-option">
+            <input type="radio" name="overlay_color" value="none" {% if overlay_color == 'none' %}checked{% endif %}>
+            None
+          </label>
+        </div>
+        <button type="submit" class="btn btn-secondary" style="margin-top: 1rem;">Save preference</button>
+      </form>
+    </div>
+  </main>
+</div>
+{% endblock %}

@@ -1,0 +1,54 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Grades{% endblock %}
+
+{% block dc_right_rail %}
+{% include "dc/_lesson_rail.html" %}
+{% endblock %}
+
+{% block dc_content %}
+<p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+  {% if admin_grades_view %}
+    Submission counts per lesson for {{ course.name }} (your cohort only). Open a lab to grade student work.
+  {% else %}
+    Lesson completion (checkmarks) and assignment review status for your division track.
+  {% endif %}
+</p>
+
+{% for group in lesson_rail %}
+  <section class="card">
+    <h2>Week {{ group.week.num }} · {{ group.week.subject }}</h2>
+    <ul class="grade-lesson-list">
+      {% for v in group.videos %}
+        <li class="grade-lesson-row">
+          <span class="lesson-check {% if v.watched %}watched{% endif %}">
+            {% if v.watched %}✓{% endif %}
+          </span>
+          <a href="{{ url_for('dc_video', videoid=v.videoid) }}">{{ v.title }}</a>
+          <span class="grade-status">
+            {% if admin_grades_view %}
+              {% if v.ungraded_count %}
+                <a href="{{ url_for('dc_admin_grade_video', videoid=v.videoid) }}" class="badge badge-warning">{{ v.ungraded_count }} to grade</a>
+              {% elif v.submitted_count %}
+                <span class="badge badge-success">{{ v.submitted_count }} graded</span>
+              {% elif 'Hands-On Lab' in v.title %}
+                <span class="badge">no submissions</span>
+              {% else %}
+                <span class="badge">—</span>
+              {% endif %}
+            {% elif v.assignment %}
+              <span class="badge {% if v.assignment.status == 'satisfactory' %}badge-success{% elif v.assignment.status == 'unsatisfactory' %}badge-warning{% endif %}">
+                {{ v.assignment.status }}
+              </span>
+            {% elif 'Hands-On Lab' in v.title %}
+              <span class="badge">not submitted</span>
+            {% else %}
+              <span class="badge">—</span>
+            {% endif %}
+          </span>
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endfor %}
+{% endblock %}

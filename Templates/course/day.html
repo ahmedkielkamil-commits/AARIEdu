@@ -1,0 +1,80 @@
+{% extends "robotics_layout.html" %}
+
+{% block page_heading %}Week {{ day.week_num }} · Day {{ day.num }}: {{ day.title }}{% endblock %}
+
+{% block course_content %}
+<p class="card-meta">{{ day.week_title }}</p>
+
+{% if day.description %}
+  <p class="day-description">{{ day.description }}</p>
+{% endif %}
+
+{% if day.slidelink %}
+<section class="slides-panel card">
+  <div class="slides-panel-inner">
+    <div>
+      <h2 class="slides-panel-title">Google Slides</h2>
+      <p class="card-meta" style="margin: 0;">Lecture deck for this session — opens in a new tab.</p>
+    </div>
+    <a class="btn btn-primary slides-open-btn"
+       href="{{ day.slidelink }}"
+       target="_blank"
+       rel="noopener noreferrer">
+      Open slides ↗
+    </a>
+  </div>
+</section>
+{% endif %}
+
+<section class="exit-ticket-box">
+  <h3>Exit ticket</h3>
+
+  {% if is_instructor %}
+    <form method="post">
+      <input type="hidden" name="action" value="update_assignment">
+      <div class="form-group">
+        <label for="assignment">What students submit for this day</label>
+        <textarea id="assignment" name="assignment" required rows="4">{{ day.assignment }}</textarea>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Save exit ticket description</button>
+    </form>
+    <p style="margin-top: 1rem;">
+      <a href="{{ url_for('course_week_tickets', courseid=courseid, weekid=day.weekid) }}">View exit ticket retention for this week →</a>
+    </p>
+  {% else %}
+    {% if day.assignment %}
+      <div class="exit-ticket-prompt">
+        <h4>What to submit</h4>
+        <p>{{ day.assignment }}</p>
+      </div>
+    {% endif %}
+    <p class="exit-ticket-note">
+      Ungraded attendance signal — upload your deliverable or a photo of today's work if you have one.
+    </p>
+    {% if classid %}
+      {% if ticket %}
+        <p class="card-meta">Exit ticket on file.</p>
+      {% endif %}
+      <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="action" value="submit_ticket">
+        <div class="form-group">
+          <label for="attachment">Submission (optional)</label>
+          <input type="file" id="attachment" name="attachment" accept="image/*,.pdf">
+          {% if ticket and ticket.miniokey %}
+            <p class="card-meta" style="margin-top:0.35rem;">Current attachment: {{ ticket.miniokey }}</p>
+          {% endif %}
+        </div>
+        <button type="submit" class="btn btn-primary">
+          {% if ticket %}Update{% else %}Submit{% endif %}
+        </button>
+      </form>
+    {% else %}
+      <p class="empty-state">You are not enrolled in this course.</p>
+    {% endif %}
+  {% endif %}
+</section>
+
+<p style="margin-top: 1.5rem;">
+  <a href="{{ url_for('course_modules', courseid=courseid) }}">← Back to modules</a>
+</p>
+{% endblock %}

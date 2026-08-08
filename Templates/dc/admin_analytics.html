@@ -1,0 +1,73 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Submission analytics{% endblock %}
+
+{% block dc_content %}
+<p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+  Submission stats for <strong>{{ cohort.name }}</strong> only.
+</p>
+<form method="get" class="inline-form" style="margin-bottom: 1.5rem;">
+  <div class="form-group">
+    <label for="courseid">Division</label>
+    <select id="courseid" name="courseid" onchange="this.form.submit()">
+      {% for c in all_courses %}
+        <option value="{{ c.courseid }}" {% if c.courseid == courseid %}selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</form>
+
+<h2>By video</h2>
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Week</th>
+        <th>Video</th>
+        <th>Submitted</th>
+        <th>Graded</th>
+        <th>Ungraded</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in analytics.by_video %}
+        <tr>
+          <td>{{ row.week_num }}</td>
+          <td>{{ row.video_title }}</td>
+          <td>{{ row.submitted_count }}</td>
+          <td>{{ row.graded_count }}</td>
+          <td>{{ row.ungraded_count }}</td>
+          <td><a href="{{ url_for('dc_admin_grade_video', videoid=row.videoid) }}">Grade</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty-state">No videos.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2 style="margin-top: 2rem;">Students falling behind</h2>
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Student</th>
+        <th>Week</th>
+        <th>Missing submission</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in analytics.students_behind %}
+        <tr>
+          <td>{{ row.fname }} {{ row.lname }}</td>
+          <td>{{ row.week_num }}</td>
+          <td>{{ row.video_title }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3" class="empty-state">Everyone is caught up — or no lab videos yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

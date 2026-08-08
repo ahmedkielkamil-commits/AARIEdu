@@ -1,0 +1,93 @@
+{% extends "robotics_layout.html" %}
+
+{% block page_heading %}Roster{% endblock %}
+
+{% block course_content %}
+<div class="teacher-panel">
+  <h3>Create student</h3>
+  <form method="post">
+    <input type="hidden" name="action" value="create">
+    <div class="inline-form">
+      <div class="form-group">
+        <label for="fname">First name</label>
+        <input type="text" id="fname" name="fname" required>
+      </div>
+      <div class="form-group">
+        <label for="lname">Last name</label>
+        <input type="text" id="lname" name="lname" required>
+      </div>
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required>
+      </div>
+      <div class="form-group">
+        <label for="password">Initial password</label>
+        <input type="password" id="password" name="password" required minlength="6">
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Create &amp; enroll</button>
+  </form>
+</div>
+
+<div class="teacher-panel">
+  <h3>Enroll existing student</h3>
+  <form method="post" class="inline-form">
+    <input type="hidden" name="action" value="enroll">
+    <div class="form-group">
+      <label for="studentid">Student ID</label>
+      <input type="number" id="studentid" name="studentid" min="1" required placeholder="e.g. 3">
+    </div>
+    <button type="submit" class="btn btn-secondary">Enroll</button>
+  </form>
+</div>
+
+<h2>Enrolled students</h2>
+{% if roster %}
+<div class="table-wrap card" style="padding:0; overflow:hidden;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in roster %}
+        <tr>
+          <td>{{ s.fname }} {{ s.lname }}</td>
+          <td>{{ s.email }}</td>
+          <td>
+            <form method="post" style="display:inline;" onsubmit="return confirm('Unenroll this student?');">
+              <input type="hidden" name="action" value="unenroll">
+              <input type="hidden" name="studentid" value="{{ s.studentid }}">
+              <button type="submit" class="btn btn-secondary btn-sm">Unenroll</button>
+            </form>
+            <form method="post" style="display:inline; margin-left: 0.35rem;" onsubmit="return confirm('Delete this student account permanently?');">
+              <input type="hidden" name="action" value="delete">
+              <input type="hidden" name="studentid" value="{{ s.studentid }}">
+              <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+            </form>
+          </td>
+        </tr>
+        <tr>
+          <td colspan="3" style="background: var(--bg-cream);">
+            <form method="post" class="inline-form">
+              <input type="hidden" name="action" value="reset_password">
+              <input type="hidden" name="studentid" value="{{ s.studentid }}">
+              <div class="form-group">
+                <label>New password</label>
+                <input type="password" name="new_password" required minlength="6" placeholder="Reset password">
+              </div>
+              <button type="submit" class="btn btn-secondary btn-sm">Reset password</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+  <p class="empty-state">No students enrolled.</p>
+{% endif %}
+{% endblock %}

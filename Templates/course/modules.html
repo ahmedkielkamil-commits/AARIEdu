@@ -1,0 +1,113 @@
+{% extends "robotics_layout.html" %}
+
+{% block page_heading %}Modules{% endblock %}
+
+{% block course_content %}
+{% if is_instructor %}
+<div class="teacher-panel">
+  <h3>Add week</h3>
+  <p class="card-meta">Lecture days and slides are managed in the database seed or admin tooling. New weeks start empty until days are added.</p>
+  <form method="post" class="inline-form">
+    <input type="hidden" name="action" value="create">
+    <div class="form-group">
+      <label>Week #</label>
+      <input type="number" name="num" min="1" max="99" required>
+    </div>
+    <div class="form-group">
+      <label>Title</label>
+      <input type="text" name="title" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Add week</button>
+  </form>
+</div>
+{% endif %}
+
+{% if weeks %}
+  <ul class="module-list">
+    {% for w in weeks %}
+      <li class="module-week-block">
+        <details class="module-week-details" {% if loop.first %}open{% endif %}>
+          <summary class="module-week-summary">
+            <span class="module-week-summary-main">
+              <span class="module-week-num">Week {{ w.num }}</span>
+              <strong>{{ w.title }}</strong>
+            </span>
+            <span class="module-week-meta">
+              {% if not user_is_instructor and w.days %}
+                {% set done = w.days | selectattr('submitted') | list | length %}
+                <span class="module-week-progress">{{ done }}/{{ w.days | length }} days</span>
+              {% endif %}
+              {% if is_instructor %}
+                <a href="{{ url_for('course_week_tickets', courseid=courseid, weekid=w.weekid) }}"
+                   class="btn btn-secondary btn-sm module-week-retention"
+                   onclick="event.stopPropagation();">Retention</a>
+              {% endif %}
+            </span>
+          </summary>
+
+          {% if w.days %}
+            <ul class="module-day-list">
+              {% for d in w.days %}
+                <li class="module-day-row">
+                  <a href="{{ url_for('course_day', courseid=courseid, dayid=d.dayid) }}" class="module-day-link">
+                    <span class="module-day-label">
+                      <span class="module-day-num">Day {{ d.num }}</span>
+                      <span class="module-day-title">{{ d.title }}</span>
+                    </span>
+                    {% if not user_is_instructor %}
+                      {% if d.submitted %}
+                        <span class="module-day-status submitted" title="Exit ticket submitted">✓</span>
+                      {% else %}
+                        <span class="module-day-status pending" title="Exit ticket not yet submitted">○</span>
+                      {% endif %}
+                    {% endif %}
+                  </a>
+                  {% if d.slidelink %}
+                    <a href="{{ d.slidelink }}"
+                       class="btn btn-secondary btn-sm module-slides-btn"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       title="Open Google Slides for Day {{ d.num }}">
+                      Slides ↗
+                    </a>
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="module-day-empty">No lecture days published for this week yet.</p>
+          {% endif %}
+        </details>
+
+        {% if is_instructor %}
+        <details class="module-instructor-edit">
+          <summary>Edit week</summary>
+          <form method="post" style="margin-top:0.75rem;">
+            <input type="hidden" name="action" value="update">
+            <input type="hidden" name="weekid" value="{{ w.weekid }}">
+            <div class="inline-form">
+              <div class="form-group">
+                <label>Week #</label>
+                <input type="number" name="num" value="{{ w.num }}" min="1" required>
+              </div>
+              <div class="form-group">
+                <label>Title</label>
+                <input type="text" name="title" value="{{ w.title }}" required>
+              </div>
+              <button type="submit" class="btn btn-secondary btn-sm">Update</button>
+            </div>
+          </form>
+          <form method="post" style="margin-top:0.5rem;" onsubmit="return confirm('Delete this week and all its days?');">
+            <input type="hidden" name="action" value="delete">
+            <input type="hidden" name="weekid" value="{{ w.weekid }}">
+            <button type="submit" class="btn btn-danger btn-sm">Delete week</button>
+          </form>
+        </details>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="empty-state">No modules published yet.</p>
+{% endif %}
+{% endblock %}

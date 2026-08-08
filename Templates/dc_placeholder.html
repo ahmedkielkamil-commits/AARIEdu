@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Data Center · AARI{% endblock %}
+
+{% block body %}
+<div class="public-page">
+  <header class="public-header">
+    <a href="{{ url_for('landing') }}" class="brand">AARI Educational Suite</a>
+  </header>
+  <main class="public-main">
+    <h1>Data Center Courses</h1>
+    <p style="color: var(--text-muted);">The data-center program (video modules, cohort chat, division tracks) is built separately. Coming soon.</p>
+    <p><a href="{{ url_for('landing') }}">← Back to home</a></p>
+  </main>
+</div>
+{% endblock %}

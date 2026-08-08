@@ -1,0 +1,36 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Roster{% endblock %}
+
+{% block dc_content %}
+<p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+  {% if user_is_dc_admin %}
+    Cohort members in {{ cohort.name }}, their division tracks, and short bios.
+  {% else %}
+    Cohort members, their division tracks, and short bios.
+  {% endif %}
+</p>
+
+{% if roster %}
+  <div class="roster-grid">
+    {% for member in roster %}
+      <article class="card roster-card">
+        <h3 style="margin-bottom: 0.25rem;">{{ member.fname }} {{ member.lname }}</h3>
+        <p class="card-meta" style="margin-bottom: 0.75rem;">
+          <span class="badge">{{ member.division_name }}</span>
+          {% if member.cohort_name and not user_is_dc_admin %}
+            <span class="badge">{{ member.cohort_name }}</span>
+          {% endif %}
+        </p>
+        {% if member.bio %}
+          <p style="margin: 0; white-space: pre-wrap;">{{ member.bio }}</p>
+        {% else %}
+          <p class="instructor-placeholder" style="margin: 0;">No bio yet.</p>
+        {% endif %}
+      </article>
+    {% endfor %}
+  </div>
+{% else %}
+  <p class="empty-state">No roster members found.</p>
+{% endif %}
+{% endblock %}

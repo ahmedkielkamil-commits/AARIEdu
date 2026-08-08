@@ -1,0 +1,67 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Progress{% endblock %}
+
+{% block dc_content %}
+{% if admin_progress_view %}
+<p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+  Watch progress for students in your cohort ({{ cohort.name }}) in {{ course.name }}.
+</p>
+
+{% if students_progress %}
+<div class="table-wrap card" style="padding:0; overflow:hidden;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Student</th>
+        <th>Email</th>
+        <th>Lessons watched</th>
+        <th>Completion</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in students_progress %}
+        <tr>
+          <td>{{ s.fname }} {{ s.lname }}</td>
+          <td>{{ s.email }}</td>
+          <td>{{ s.watched_videos }} / {{ s.total_videos }}</td>
+          <td>{{ s.completion_pct }}%</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+  <p class="empty-state">No students enrolled in this division track yet.</p>
+{% endif %}
+
+{% else %}
+<section class="card">
+  <h2>Overall completion</h2>
+  <div class="progress-bar progress-bar-lg" role="progressbar"
+       aria-valuenow="{{ completion.completion_pct }}" aria-valuemin="0" aria-valuemax="100">
+    <div class="progress-fill" style="width: {{ completion.completion_pct }}%;"></div>
+  </div>
+  <p style="margin: 0.75rem 0 0;">
+    <strong>{{ completion.watched_videos }}</strong> of
+    <strong>{{ completion.total_videos }}</strong> lessons watched
+    ({{ completion.completion_pct }}%)
+  </p>
+</section>
+
+{% if resume %}
+<section class="card">
+  <h2>Pick up where you left off</h2>
+  <p><strong>{{ resume.video_title }}</strong></p>
+  <p class="card-meta">Week {{ resume.week_num }} · last updated {{ resume.updated_at | format_datetime }}</p>
+  <a href="{{ url_for('dc_video', videoid=resume.videoid) }}" class="btn btn-primary">Continue lesson</a>
+</section>
+{% else %}
+<section class="card">
+  <h2>Pick up where you left off</h2>
+  <p class="empty-state">Start your first lesson from Course Content.</p>
+  <a href="{{ url_for('dc_home') }}" class="btn btn-secondary">Go to Course Content</a>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}
