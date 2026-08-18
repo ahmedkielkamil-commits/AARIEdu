@@ -3,7 +3,7 @@
 {% block page_heading %}Manage weeks &amp; videos{% endblock %}
 
 {% block dc_content %}
-<p style="color: var(--text-muted);">Select a division track to manage its weekly modules and lesson videos.</p>
+<p style="color: var(--text-muted);">Select a division track to manage its weekly modules and lesson videos. Upload a video file to transcode and store it in MinIO automatically.</p>
 
 <form method="get" class="inline-form" style="margin-bottom: 1.5rem;">
   <div class="form-group">
@@ -73,7 +73,7 @@
           <li>
             <div class="video-admin-item">
               <strong>Day {{ v.day }} · {{ v.title }}</strong>
-              <p class="card-meta" style="margin: 0.25rem 0;">{{ v.miniokey }}</p>
+              <p class="card-meta" style="margin: 0.25rem 0;">Storage key: {{ v.miniokey }}</p>
               <form method="post" class="inline-form" id="update-video-{{ v.videoid }}">
                 <input type="hidden" name="action" value="update_video">
                 <input type="hidden" name="videoid" value="{{ v.videoid }}">
@@ -86,7 +86,7 @@
                   <input type="text" name="title" value="{{ v.title }}" required>
                 </div>
                 <div class="form-group">
-                  <label>MinIO key</label>
+                  <label>MinIO key <span class="card-meta">(auto-updated after upload)</span></label>
                   <input type="text" name="miniokey" value="{{ v.miniokey }}" required>
                 </div>
                 <div class="form-group">
@@ -98,14 +98,21 @@
                   <input type="text" name="reflection" value="{{ v.reflection }}" required>
                 </div>
               </form>
+              <div class="video-upload-section">
+                <h4 class="video-upload-heading">Upload lesson video</h4>
+                {% with videoid=v.videoid %}
+                  {% include "dc/_video_upload.html" %}
+                {% endwith %}
+              </div>
               <div class="video-admin-actions">
-                <button type="submit" form="update-video-{{ v.videoid }}" class="btn btn-secondary btn-sm">Update video</button>
+                <button type="submit" form="update-video-{{ v.videoid }}" class="btn btn-secondary btn-sm">Update metadata</button>
                 <form method="post" onsubmit="return confirm('Delete video?');">
                   <input type="hidden" name="action" value="delete_video">
                   <input type="hidden" name="videoid" value="{{ v.videoid }}">
                   <button type="submit" class="btn btn-danger btn-sm">Delete</button>
                 </form>
                 <a href="{{ url_for('dc_admin_grade_video', videoid=v.videoid) }}" class="btn btn-sm btn-secondary">Grade</a>
+                <a href="{{ url_for('dc_video', videoid=v.videoid) }}" class="btn btn-sm btn-secondary">Preview</a>
               </div>
             </div>
           </li>
@@ -117,7 +124,7 @@
 
     <div class="teacher-panel" style="margin-top: 1rem;">
       <h3>Add video</h3>
-      <form method="post">
+      <form method="post" enctype="multipart/form-data">
         <input type="hidden" name="action" value="create_video">
         <input type="hidden" name="weekid" value="{{ week.weekid }}">
         <div class="form-group">
@@ -129,8 +136,13 @@
           <input type="text" name="title" required>
         </div>
         <div class="form-group">
-          <label>MinIO key</label>
-          <input type="text" name="miniokey" required placeholder="videos/...">
+          <label>Lesson video file</label>
+          <input type="file" name="video_file" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v,.mpeg,.mpg">
+          <p class="card-meta" style="margin-top: 0.35rem;">Choose a file to upload and transcode automatically.</p>
+        </div>
+        <div class="form-group">
+          <label>MinIO key <span class="card-meta">(optional if uploading a file)</span></label>
+          <input type="text" name="miniokey" placeholder="videos/... or leave blank when uploading">
         </div>
         <div class="form-group">
           <label>Script</label>
@@ -149,4 +161,8 @@
     </div>
   </section>
 {% endfor %}
+{% endblock %}
+
+{% block dc_scripts %}
+<script src="{{ url_for('static', filename='js/dc_admin_upload.js') }}"></script>
 {% endblock %}

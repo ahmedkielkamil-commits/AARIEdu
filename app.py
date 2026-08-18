@@ -14,6 +14,7 @@ from flask import (
     Flask,
     abort,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -24,9 +25,16 @@ from werkzeug.utils import secure_filename
 
 import dcqueries as dq
 import roboticsqueries as rq
+import streaming as video_streaming
+from db import mysql_config_hint
+from streaming import StreamingAuthError
 
 app = Flask(__name__, template_folder="Templates", static_folder="static")
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-change-me-in-production")
+
+_mysql_hint = mysql_config_hint()
+if _mysql_hint:
+    print(f"\n*** MySQL config: {_mysql_hint}\n")
 
 UPLOAD_DIR = Path(app.static_folder) / "uploads" / "exittickets"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -67,18 +75,34 @@ def dc_login_required(view):
     return wrapped
 
 
-def dc_admin_required(view):
+def dc_platform_admin_required(view):
     @wraps(view)
     @dc_login_required
     def wrapped(*args, **kwargs):
         if session.get("user_type") != "admin":
             abort(403)
         admin = dq.get_admin_public(session["user_id"])
-        if not admin or not admin.get("cohortid"):
+        if not admin:
             abort(403)
         return view(*args, **kwargs)
 
     return wrapped
+
+
+def dc_cohort_staff_required(view):
+    """Cohort leaders and platform admins (grading, roster, cohort analytics)."""
+    @wraps(view)
+    @dc_login_required
+    def wrapped(*args, **kwargs):
+        if not is_dc_cohort_staff():
+            abort(403)
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+# Backward-compatible alias for course-content routes
+dc_admin_required = dc_platform_admin_required
 
 
 def is_dc_suite() -> bool:
@@ -86,11 +110,40 @@ def is_dc_suite() -> bool:
 
 
 def is_dc_admin() -> bool:
+    """Platform course admin (authoring, all tracks)."""
     return is_dc_suite() and session.get("user_type") == "admin"
+
+
+def is_dc_leader() -> bool:
+    return is_dc_suite() and session.get("user_type") == "leader"
+
+
+def is_dc_cohort_staff() -> bool:
+    return is_dc_admin() or is_dc_leader()
 
 
 def is_dc_student() -> bool:
     return is_dc_suite() and session.get("user_type") == "student"
+
+
+def dc_video_stream_url(videoid: int) -> str | None:
+    """Presigned MinIO playback URL for the current DC user, or None if unavailable."""
+    try:
+        if is_dc_admin():
+            return video_streaming.get_video_stream_url(
+                videoid, None, is_admin=True
+            )
+        if is_dc_leader():
+            return video_streaming.get_video_stream_url(
+                videoid, None, is_staff=True
+            )
+        if is_dc_student():
+            student = dq.get_student_public(session["user_id"])
+            if student:
+                return video_streaming.get_video_stream_url(videoid, student)
+    except StreamingAuthError:
+        return None
+    return None
 
 
 def current_user():
@@ -99,6 +152,8 @@ def current_user():
     if session.get("suite") == "dc":
         if session.get("user_type") == "admin":
             return dq.get_admin_public(session["user_id"])
+        if session.get("user_type") == "leader":
+            return dq.get_leader_public(session["user_id"])
         return dq.get_student_public(session["user_id"])
     if session.get("user_type") == "student":
         return rq.get_student_public(session["user_id"])
@@ -208,10 +263,14 @@ def save_attachment(file_storage) -> str | None:
 def dc_member_type_and_id() -> tuple[str, int]:
     if is_dc_admin():
         return "admin", session["user_id"]
+    if is_dc_leader():
+        return "leader", session["user_id"]
     return "student", session["user_id"]
 
 
-def video_in_division(videoid: int, courseid: int) -> bool:
+def video_in_division(videoid: int, courseid: int, studentid: int | None = None) -> bool:
+    if studentid is not None:
+        return dq.student_can_access_video(studentid, videoid)
     video = dq.get_video(videoid)
     if not video:
         return False
@@ -219,15 +278,37 @@ def video_in_division(videoid: int, courseid: int) -> bool:
     return week is not None and week["courseid"] == courseid
 
 
-def dc_admin_with_cohort() -> tuple[dict, int]:
-    """Return (admin row, cohortid) for a cohort-scoped DC admin, or abort 403."""
-    if not is_dc_admin():
+def dc_staff_cohortid() -> int | None:
+    """Cohort scope for grading/analytics: leaders are fixed; admins may filter."""
+    if is_dc_leader():
+        student = dq.get_student_public(session["user_id"])
+        return student.get("cohortid") if student else None
+    if is_dc_admin():
+        return request.args.get("cohortid", type=int) or request.form.get(
+            "cohortid", type=int
+        )
+    return None
+
+
+def dc_leader_with_cohort() -> tuple[dict, int]:
+    """Return (leader row, cohortid) or abort."""
+    if not is_dc_leader():
         abort(403)
-    admin = dq.get_admin_public(session["user_id"])
-    cohortid = admin.get("cohortid") if admin else None
-    if not admin or not cohortid:
+    leader = dq.get_leader_public(session["user_id"])
+    cohortid = leader.get("cohortid") if leader else None
+    if not leader or not cohortid:
         abort(403)
-    return admin, cohortid
+    return leader, cohortid
+
+
+def dc_admin_with_cohort() -> tuple[dict | None, int | None]:
+    """Return (admin row, cohortid) for staff views; cohortid None = all cohorts."""
+    if is_dc_admin():
+        return dq.get_admin_public(session["user_id"]), dc_staff_cohortid()
+    if is_dc_leader():
+        student, cohortid = dc_leader_with_cohort()
+        return student, cohortid
+    abort(403)
 
 
 def dc_admin_courseid() -> int:
@@ -239,6 +320,59 @@ def dc_admin_courseid() -> int:
     return session.get("dc_courseid") or 1
 
 
+def resolve_next_video(studentid: int, courseid: int) -> dict | None:
+    """Return the lesson the student should watch next (resume or first unwatched)."""
+    resume = dq.get_resume_point(studentid)
+    if resume and not resume.get("watched"):
+        return resume
+
+    videos = dq.get_videos_for_student(studentid)
+    if not videos:
+        return None
+
+    progress_rows = dq.get_progress_for_student(studentid)
+    watched = {p["videoid"]: p["watched"] for p in progress_rows}
+    for video in videos:
+        if not watched.get(video["videoid"]):
+            return {
+                "videoid": video["videoid"],
+                "video_title": video["title"],
+                "week_num": video["week_num"],
+                "day_num": video["day"],
+                "watched": False,
+                "last_position": 0,
+            }
+
+    last = videos[-1]
+    return {
+        "videoid": last["videoid"],
+        "video_title": last["title"],
+        "week_num": last["week_num"],
+        "day_num": last["day"],
+        "watched": True,
+        "last_position": 0,
+    }
+
+
+def build_week_path(lesson_rail: list[dict], next_videoid: int | None) -> list[dict]:
+    """Summarize week completion for the dashboard learning path."""
+    path: list[dict] = []
+    for group in lesson_rail:
+        videos = group["videos"]
+        all_watched = bool(videos) and all(v["watched"] for v in videos)
+        is_current = next_videoid is not None and any(
+            v["videoid"] == next_videoid for v in videos
+        )
+        path.append(
+            {
+                "week": group["week"],
+                "all_watched": all_watched,
+                "is_current": is_current,
+            }
+        )
+    return path
+
+
 def build_lesson_rail(
     studentid: int,
     courseid: int,
@@ -246,8 +380,8 @@ def build_lesson_rail(
     *,
     include_assignments: bool = False,
 ) -> list[dict]:
-    weeks = dq.get_weeks_for_course(courseid)
-    videos = dq.get_videos_for_course(courseid)
+    weeks = dq.get_weeks_for_student(studentid)
+    videos = dq.get_videos_for_student(studentid)
     progress_rows = dq.get_progress_for_student(studentid)
     watched = {p["videoid"]: p["watched"] for p in progress_rows}
     assignments: dict[int, dict] = {}
@@ -311,16 +445,17 @@ def dc_student_context(active: str, student: dict, **extra) -> dict:
         "completion": completion,
         "monogram": course_monogram,
         "all_courses": dq.get_all_courses(),
+        "orchestration_branch": student.get("orchestration_branch"),
     }
     ctx.update(extra)
     return ctx
 
 
-def dc_admin_context(active: str, admin: dict, **extra) -> dict:
+def dc_leader_context(active: str, leader: dict, **extra) -> dict:
     courseid = extra.pop("courseid", None) or dc_admin_courseid()
     session["dc_courseid"] = courseid
     course = dq.get_course(courseid)
-    cohort = dq.get_cohort(admin["cohortid"])
+    cohort = dq.get_cohort(leader["cohortid"])
     ctx = {
         "course": course,
         "courseid": courseid,
@@ -334,26 +469,56 @@ def dc_admin_context(active: str, admin: dict, **extra) -> dict:
     return ctx
 
 
+def dc_admin_context(active: str, admin: dict, **extra) -> dict:
+    courseid = extra.pop("courseid", None) or dc_admin_courseid()
+    session["dc_courseid"] = courseid
+    course = dq.get_course(courseid)
+    cohortid = extra.get("cohortid") or dc_staff_cohortid()
+    cohort = dq.get_cohort(cohortid) if cohortid else None
+    ctx = {
+        "course": course,
+        "courseid": courseid,
+        "cohort": cohort,
+        "sidebar_active": active,
+        "progress_pct": 0,
+        "monogram": course_monogram,
+        "all_courses": dq.get_all_courses(),
+        "all_cohorts": dq.get_all_cohorts(),
+    }
+    ctx.update(extra)
+    return ctx
+
+
 def dc_page_context(active: str, **extra) -> dict:
     if is_dc_admin():
         admin = dq.get_admin_public(session["user_id"])
         if not admin:
             abort(403)
         return dc_admin_context(active, admin, **extra)
+    if is_dc_leader():
+        leader = dq.get_leader_public(session["user_id"])
+        if not leader:
+            abort(403)
+        return dc_leader_context(active, leader, **extra)
     student = dq.get_student_public(session["user_id"])
     if not student:
         abort(403)
     return dc_student_context(active, student, **extra)
 
 
-def jitsi_room_name(student: dict | None, admin: dict | None) -> str:
+def jitsi_room_name(
+    student: dict | None,
+    admin: dict | None,
+    leader: dict | None = None,
+) -> str:
     cohortid = None
     courseid = None
     if student:
         cohortid = student["cohortid"]
         courseid = student["courseid"]
-    elif admin and admin.get("cohortid"):
-        cohortid = admin["cohortid"]
+    elif leader:
+        cohortid = leader["cohortid"]
+        courseid = session.get("dc_courseid") or 1
     parts = ["aari-dc"]
     if cohortid:
         parts.append(f"cohort-{cohortid}")
@@ -391,6 +556,8 @@ def inject_globals():
         "is_logged_in": "user_id" in session,
         "user_is_instructor": is_instructor(),
         "user_is_dc_admin": is_dc_admin(),
+        "user_is_dc_leader": is_dc_leader(),
+        "user_is_dc_cohort_staff": is_dc_cohort_staff(),
     }
 
 
@@ -401,6 +568,16 @@ def format_datetime(value):
     if isinstance(value, datetime):
         return value.strftime("%b %d, %Y · %I:%M %p")
     return str(value)
+
+
+@app.template_filter("branch_label")
+def branch_label(branch: str | None) -> str:
+    """Human-readable orchestration branch name."""
+    if branch == "software":
+        return "Software branch"
+    if branch == "hardware":
+        return "Hardware branch"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -455,11 +632,18 @@ def login():
             dest = request.args.get("next") or url_for("dc_home")
             return redirect(dest)
 
+        dc_leader = dq.get_leader_by_email(email)
+        if dc_leader and verify_password(password, dc_leader["password"]):
+            session.clear()
+            session["suite"] = "dc"
+            session["user_id"] = dc_leader["leaderid"]
+            session["user_type"] = "leader"
+            session["email"] = dc_leader["email"]
+            dest = request.args.get("next") or url_for("dc_home")
+            return redirect(dest)
+
         dc_admin = dq.get_admin_by_email(email)
         if dc_admin and verify_password(password, dc_admin["password"]):
-            if not dc_admin.get("cohortid"):
-                flash("This admin account is not assigned to a cohort.", "error")
-                return render_template("login.html")
             session.clear()
             session["suite"] = "dc"
             session["user_id"] = dc_admin["adminid"]
@@ -777,23 +961,145 @@ def course_roster(courseid):
 # ---------------------------------------------------------------------------
 
 
-@app.route("/dc/")
-@app.route("/dc")
+@app.route("/dc/", methods=["GET", "POST"])
+@app.route("/dc", methods=["GET", "POST"])
 @dc_login_required
 def dc_home():
     if is_dc_admin():
-        dc_admin_with_cohort()
+        admin = dq.get_admin_public(session["user_id"])
+        if not admin:
+            abort(403)
+        courseid = request.args.get("courseid", type=int) or dc_admin_courseid()
+        session["dc_courseid"] = courseid
+        cross_cohort = dq.get_cross_cohort_engagement()
+        weeks = dq.get_weeks_for_course(courseid)
+        videos = dq.get_videos_for_course(courseid)
+        total_ungraded = sum(int(row.get("ungraded_count") or 0) for row in cross_cohort)
+        ctx = dc_admin_context(
+            "home",
+            admin,
+            courseid=courseid,
+            week_path=[{"week": week} for week in weeks],
+            video_count=len(videos),
+            cross_cohort=cross_cohort,
+            total_ungraded=total_ungraded,
+        )
+        return render_template("dc/admin_home.html", **ctx)
+
+    if is_dc_leader():
+        leader, cohortid = dc_leader_with_cohort()
+        courseid = request.args.get("courseid", type=int) or dc_admin_courseid()
+        session["dc_courseid"] = courseid
+        analytics = dq.get_submission_analytics(courseid, cohortid=cohortid)
+        weeks = dq.get_weeks_for_course(courseid)
+        videos = dq.get_videos_for_course(courseid)
+        total_ungraded = sum(
+            int(row.get("ungraded_count") or 0) for row in analytics["by_video"]
+        )
+        ungraded_queue = [
+            row
+            for row in analytics["by_video"]
+            if int(row.get("ungraded_count") or 0) > 0
+        ][:5]
+        ctx = dc_leader_context(
+            "home",
+            leader,
+            courseid=courseid,
+            week_path=[{"week": week} for week in weeks],
+            video_count=len(videos),
+            student_count=dq.count_cohort_learners(cohortid),
+            total_ungraded=total_ungraded,
+            ungraded_queue=ungraded_queue,
+            recent_messages=dq.get_recent_messages_for_member(
+                "leader", leader["leaderid"], limit=3
+            ),
+        )
+        return render_template("dc/leader_home.html", **ctx)
+
+    if not is_dc_student():
+        abort(403)
+    student = dq.get_student_public(session["user_id"])
+    if not student:
+        abort(403)
+
+    if request.method == "POST":
+        action = request.form.get("action", "bio")
+        if action == "branch":
+            branch = request.form.get("orchestration_branch", "").strip()
+            if branch in ("software", "hardware"):
+                updated = dq.set_orchestration_branch(student["studentid"], branch)
+                if updated:
+                    flash(f"You're on the {branch} branch.", "success")
+                    student = updated
+                else:
+                    flash("Could not save branch choice.", "error")
+            else:
+                flash("Choose software or hardware.", "error")
+            return redirect(url_for("dc_home"))
+
+        bio = request.form.get("bio", "").strip() or None
+        updated = dq.update_student_profile(
+            student["studentid"],
+            student["fname"],
+            student["lname"],
+            student["email"],
+            bio,
+        )
+        if updated:
+            flash("Bio updated.", "success")
+            student = updated
+        else:
+            flash("Could not update bio.", "error")
+        return redirect(url_for("dc_home"))
+
+    needs_branch = dq.student_needs_branch_choice(student["studentid"])
+
+    next_video = resolve_next_video(student["studentid"], student["courseid"])
+    lesson_rail = build_lesson_rail(
+        student["studentid"],
+        student["courseid"],
+        next_video["videoid"] if next_video else None,
+    )
+    ctx = dc_student_context(
+        "home",
+        student,
+        next_video=next_video,
+        week_path=build_week_path(
+            lesson_rail, next_video["videoid"] if next_video else None
+        ),
+        recent_messages=dq.get_recent_messages_for_member(
+            "student", student["studentid"], limit=3
+        ),
+        profile=student,
+        needs_branch_choice=needs_branch,
+    )
+    return render_template("dc/home.html", **ctx)
+
+
+@app.route("/dc/content")
+@dc_login_required
+def dc_content():
+    """Jump to the student's next lesson (or first lesson in the track)."""
+    if is_dc_admin():
         courseid = dc_admin_courseid()
         videos = dq.get_videos_for_course(courseid)
         if videos:
             return redirect(url_for("dc_video", videoid=videos[0]["videoid"]))
         return redirect(url_for("dc_admin_weeks", courseid=courseid))
+    if is_dc_leader():
+        courseid = dc_admin_courseid()
+        videos = dq.get_videos_for_course(courseid)
+        if videos:
+            return redirect(url_for("dc_video", videoid=videos[0]["videoid"]))
+        return redirect(url_for("dc_about"))
+    if not is_dc_student():
+        abort(403)
     student = dq.get_student_public(session["user_id"])
     if not student:
         abort(403)
-    videos = dq.get_videos_for_course(student["courseid"])
-    if videos:
-        return redirect(url_for("dc_video", videoid=videos[0]["videoid"]))
+    next_video = resolve_next_video(student["studentid"], student["courseid"])
+    if next_video:
+        return redirect(url_for("dc_video", videoid=next_video["videoid"]))
     return redirect(url_for("dc_about"))
 
 
@@ -816,7 +1122,7 @@ def dc_video(videoid):
 
     if is_dc_student():
         student = dq.get_student_public(session["user_id"])
-        if not student or not video_in_division(videoid, student["courseid"]):
+        if not student or not video_in_division(videoid, student["courseid"], student["studentid"]):
             abort(403)
         dq.get_or_create_progress(student["studentid"], videoid)
 
@@ -848,14 +1154,34 @@ def dc_video(videoid):
             week=week,
             progress=progress,
             assignment=assignment,
+            stream_url=dc_video_stream_url(videoid),
             lesson_rail=build_lesson_rail(
                 student["studentid"], student["courseid"], videoid
             ),
         )
         return render_template("dc/video.html", **ctx)
 
-    # Admin may view any video for grading context (cohort-scoped submission stats)
-    admin, cohortid = dc_admin_with_cohort()
+    if is_dc_leader():
+        leader, cohortid = dc_leader_with_cohort()
+        ctx = dc_leader_context(
+            "content",
+            leader,
+            courseid=week["courseid"],
+            video=video,
+            week=week,
+            progress=None,
+            assignment=None,
+            stream_url=dc_video_stream_url(videoid),
+            lesson_rail=build_lesson_rail_for_course(
+                week["courseid"], videoid, include_grading=True, cohortid=cohortid
+            ),
+        )
+        return render_template("dc/video.html", **ctx)
+
+    # Platform admin preview for grading context
+    admin = dq.get_admin_public(session["user_id"])
+    if not admin:
+        abort(403)
     ctx = dc_admin_context(
         "content",
         admin,
@@ -864,8 +1190,9 @@ def dc_video(videoid):
         week=week,
         progress=None,
         assignment=None,
+        stream_url=dc_video_stream_url(videoid),
         lesson_rail=build_lesson_rail_for_course(
-            week["courseid"], videoid, include_grading=True, cohortid=cohortid
+            week["courseid"], videoid, include_grading=True, cohortid=None
         ),
     )
     return render_template("dc/video.html", **ctx)
@@ -874,16 +1201,28 @@ def dc_video(videoid):
 @app.route("/dc/assignments")
 @dc_login_required
 def dc_assignments():
-    if is_dc_admin():
-        admin, cohortid = dc_admin_with_cohort()
+    if is_dc_cohort_staff():
+        staff, cohortid = dc_admin_with_cohort()
         courseid = dc_admin_courseid()
-        ctx = dc_admin_context(
-            "assignments",
-            admin,
-            courseid=courseid,
-            assignments=dq.get_assignments_for_course(courseid, cohortid=cohortid),
-            admin_assignments_view=True,
-        )
+        if is_dc_leader():
+            ctx = dc_leader_context(
+                "assignments",
+                staff,
+                courseid=courseid,
+                assignments=dq.get_assignments_for_course(courseid, cohortid=cohortid),
+                admin_assignments_view=True,
+            )
+        else:
+            ctx = dc_admin_context(
+                "assignments",
+                staff,
+                courseid=courseid,
+                cohortid=cohortid,
+                assignments=dq.get_assignments_for_course(
+                    courseid, cohortid=cohortid
+                ),
+                admin_assignments_view=True,
+            )
         return render_template("dc/assignments.html", **ctx)
 
     if not is_dc_student():
@@ -902,18 +1241,30 @@ def dc_assignments():
 @app.route("/dc/grades")
 @dc_login_required
 def dc_grades():
-    if is_dc_admin():
-        admin, cohortid = dc_admin_with_cohort()
+    if is_dc_cohort_staff():
+        staff, cohortid = dc_admin_with_cohort()
         courseid = dc_admin_courseid()
-        ctx = dc_admin_context(
-            "grades",
-            admin,
-            courseid=courseid,
-            lesson_rail=build_lesson_rail_for_course(
-                courseid, include_grading=True, cohortid=cohortid
-            ),
-            admin_grades_view=True,
-        )
+        if is_dc_leader():
+            ctx = dc_leader_context(
+                "grades",
+                staff,
+                courseid=courseid,
+                lesson_rail=build_lesson_rail_for_course(
+                    courseid, include_grading=True, cohortid=cohortid
+                ),
+                admin_grades_view=True,
+            )
+        else:
+            ctx = dc_admin_context(
+                "grades",
+                staff,
+                courseid=courseid,
+                cohortid=cohortid,
+                lesson_rail=build_lesson_rail_for_course(
+                    courseid, include_grading=True, cohortid=cohortid
+                ),
+                admin_grades_view=True,
+            )
         return render_template("dc/grades.html", **ctx)
 
     if not is_dc_student():
@@ -936,8 +1287,8 @@ def dc_grades():
 @app.route("/dc/progress")
 @dc_login_required
 def dc_progress():
-    if is_dc_admin():
-        admin, cohortid = dc_admin_with_cohort()
+    if is_dc_cohort_staff():
+        staff, cohortid = dc_admin_with_cohort()
         courseid = dc_admin_courseid()
         students_progress = dq.get_students_progress_for_course(
             courseid, cohortid=cohortid
@@ -946,13 +1297,23 @@ def dc_progress():
             total = row["total_videos"] or 0
             watched = row["watched_videos"] or 0
             row["completion_pct"] = int(watched / total * 100) if total else 0
-        ctx = dc_admin_context(
-            "progress",
-            admin,
-            courseid=courseid,
-            students_progress=students_progress,
-            admin_progress_view=True,
-        )
+        if is_dc_leader():
+            ctx = dc_leader_context(
+                "progress",
+                staff,
+                courseid=courseid,
+                students_progress=students_progress,
+                admin_progress_view=True,
+            )
+        else:
+            ctx = dc_admin_context(
+                "progress",
+                staff,
+                courseid=courseid,
+                cohortid=cohortid,
+                students_progress=students_progress,
+                admin_progress_view=True,
+            )
         return render_template("dc/progress.html", **ctx)
 
     if not is_dc_student():
@@ -976,13 +1337,21 @@ def dc_roster():
     if not user:
         abort(403)
 
-    if is_dc_admin():
-        admin, cohortid = dc_admin_with_cohort()
-        ctx = dc_admin_context(
-            "roster",
-            admin,
-            roster=dq.get_cohort_roster(cohortid),
-        )
+    if is_dc_cohort_staff():
+        staff, cohortid = dc_admin_with_cohort()
+        if is_dc_leader():
+            ctx = dc_leader_context(
+                "roster",
+                staff,
+                roster=dq.get_cohort_roster(cohortid),
+                cohort_leader=dq.get_leader_for_cohort(cohortid),
+            )
+        else:
+            ctx = dc_admin_context(
+                "roster",
+                staff,
+                roster_by_cohort=dq.get_roster_by_cohort(),
+            )
         return render_template("dc/roster.html", **ctx)
 
     cohortid = user.get("cohortid")
@@ -1057,7 +1426,7 @@ def dc_messenger_start_dm():
     member_type, member_id = dc_member_type_and_id()
     peer_type = request.form.get("peer_type", "").strip()
     peer_id = request.form.get("peer_id", type=int)
-    if peer_type not in ("student", "admin") or not peer_id:
+    if peer_type not in ("student", "leader", "admin") or not peer_id:
         flash("Select someone to message.", "error")
         return redirect(url_for("dc_messenger"))
 
@@ -1084,7 +1453,7 @@ def dc_messenger_start_dm():
 
 
 @app.route("/dc/messenger/<int:channelid>/delete", methods=["POST"])
-@dc_admin_required
+@dc_cohort_staff_required
 def dc_messenger_delete(channelid):
     member_type, member_id = dc_member_type_and_id()
     if not can_access_dc_channel(channelid, member_type, member_id):
@@ -1102,7 +1471,8 @@ def dc_calls():
     user = current_user()
     student = user if is_dc_student() else None
     admin = user if is_dc_admin() else None
-    room = jitsi_room_name(student, admin)
+    leader = user if is_dc_leader() else None
+    room = jitsi_room_name(student, admin, leader)
     ctx = dc_page_context(
         "calls",
         jitsi_room=room,
@@ -1123,8 +1493,8 @@ def dc_account():
                 flash("Display preference saved.", "success")
             return redirect(url_for("dc_account"))
 
-        if not is_dc_student():
-            flash("Only students can edit profile here.", "error")
+        if not is_dc_student() and not is_dc_leader():
+            flash("Only students and cohort leaders can edit profile here.", "error")
             return redirect(url_for("dc_account"))
 
         fname = request.form.get("fname", "").strip()
@@ -1133,6 +1503,15 @@ def dc_account():
         bio = request.form.get("bio", "").strip() or None
         if not fname or not lname or not email:
             flash("Name and email are required.", "error")
+        elif is_dc_leader():
+            updated = dq.update_leader_profile(
+                session["user_id"], fname, lname, email, bio
+            )
+            if updated:
+                session["email"] = email
+                flash("Profile updated.", "success")
+            else:
+                flash("Could not update profile.", "error")
         else:
             updated = dq.update_student_profile(
                 session["user_id"], fname, lname, email, bio
@@ -1191,9 +1570,22 @@ def dc_admin_weeks():
             script = request.form.get("script", "").strip()
             instructions = request.form.get("instructions", "").strip()
             reflection = request.form.get("reflection", "").strip()
+            upload = request.files.get("video_file")
+            has_upload = upload and upload.filename
+            if not miniokey and has_upload:
+                miniokey = "pending/processing"
             if weekid and day and title and miniokey and script and instructions and reflection:
-                dq.create_video(weekid, day, title, miniokey, script, instructions, reflection)
-                flash("Video created.", "success")
+                video = dq.create_video(
+                    weekid, day, title, miniokey, script, instructions, reflection
+                )
+                if video and has_upload:
+                    try:
+                        video_streaming.enqueue_video_upload(video["videoid"], upload)
+                        flash("Video added; transcoding started.", "success")
+                    except ValueError as exc:
+                        flash(f"Video created but upload failed: {exc}", "error")
+                elif video:
+                    flash("Video created.", "success")
         elif action == "update_video":
             videoid = request.form.get("videoid", type=int)
             day = request.form.get("day", type=int)
@@ -1232,10 +1624,78 @@ def dc_admin_weeks():
     return render_template("dc/admin_weeks.html", **ctx)
 
 
-@app.route("/dc/admin/grade/<int:videoid>", methods=["GET", "POST"])
+@app.route("/dc/admin/video/<int:videoid>/upload", methods=["POST"])
 @dc_admin_required
+def dc_admin_video_upload(videoid):
+    """Accept a source video file and enqueue background transcode (admin only)."""
+    upload = request.files.get("video")
+    try:
+        result = video_streaming.enqueue_video_upload(videoid, upload)
+        return jsonify(result), 202
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/dc/admin/video/<int:videoid>/transcode-status")
+@dc_admin_required
+def dc_admin_video_transcode_status(videoid):
+    """Return processing / ready / failed status for admin UI polling."""
+    if not dq.get_video(videoid):
+        abort(404)
+    return jsonify(video_streaming.get_transcode_status(videoid))
+
+
+@app.route("/dc/admin/video/<int:videoid>/cancel-transcode", methods=["POST"])
+@dc_admin_required
+def dc_admin_video_cancel_transcode(videoid):
+    """Cancel a queued or in-progress transcode job (admin only)."""
+    if not dq.get_video(videoid):
+        abort(404)
+    return jsonify(video_streaming.cancel_video_transcode(videoid))
+
+
+@app.route("/dc/video/<int:videoid>/stream")
+@dc_login_required
+def dc_video_stream(videoid):
+    """
+    Return a presigned MinIO URL for authorized playback.
+
+    Never exposes the raw miniokey — only the time-limited URL.
+    """
+    if is_dc_admin():
+        url = video_streaming.get_video_stream_url(
+            videoid, None, is_admin=True
+        )
+    elif is_dc_leader():
+        url = video_streaming.get_video_stream_url(
+            videoid, None, is_staff=True
+        )
+    elif is_dc_student():
+        student = dq.get_student_public(session["user_id"])
+        if not student:
+            abort(403)
+        try:
+            url = video_streaming.get_video_stream_url(videoid, student)
+        except StreamingAuthError:
+            abort(403)
+    else:
+        abort(403)
+
+    if not url:
+        return jsonify({"error": "Video not available for streaming."}), 404
+
+    return jsonify(
+        {
+            "url": url,
+            "expires_in": video_streaming.PRESIGNED_EXPIRY_SECONDS,
+        }
+    )
+
+
+@app.route("/dc/admin/grade/<int:videoid>", methods=["GET", "POST"])
+@dc_cohort_staff_required
 def dc_admin_grade_video(videoid):
-    admin, cohortid = dc_admin_with_cohort()
+    staff, cohortid = dc_admin_with_cohort()
     video = dq.get_video(videoid)
     if not video:
         abort(404)
@@ -1249,46 +1709,76 @@ def dc_admin_grade_video(videoid):
         feedback = request.form.get("feedback", "").strip() or None
         if assignmentid and status:
             assignment = dq.get_assignment(assignmentid)
-            if assignment and dq.student_in_cohort(
-                assignment["studentid"], cohortid
-            ):
-                result = dq.grade_assignment(assignmentid, status, feedback)
-                if result:
-                    flash("Grade saved.", "success")
+            if assignment:
+                if cohortid is not None and not dq.student_in_cohort(
+                    assignment["studentid"], cohortid
+                ):
+                    flash("You can only grade students in your cohort.", "error")
                 else:
-                    flash("Could not save grade.", "error")
+                    result = dq.grade_assignment(assignmentid, status, feedback)
+                    if result:
+                        flash("Grade saved.", "success")
+                    else:
+                        flash("Could not save grade.", "error")
             else:
-                flash("You can only grade students in your cohort.", "error")
+                flash("Assignment not found.", "error")
         return redirect(url_for("dc_admin_grade_video", videoid=videoid))
 
-    ctx = dc_admin_context(
-        "admin_analytics",
-        admin,
-        courseid=week["courseid"],
-        video=video,
-        submissions=dq.get_submissions_for_video(videoid, cohortid=cohortid),
-    )
+    if is_dc_leader():
+        ctx = dc_leader_context(
+            "admin_analytics",
+            staff,
+            courseid=week["courseid"],
+            video=video,
+            submissions=dq.get_submissions_for_video(videoid, cohortid=cohortid),
+        )
+    else:
+        ctx = dc_admin_context(
+            "admin_analytics",
+            staff,
+            courseid=week["courseid"],
+            cohortid=cohortid,
+            video=video,
+            submissions=dq.get_submissions_for_video(videoid, cohortid=cohortid),
+        )
     return render_template("dc/admin_grade.html", **ctx)
 
 
 @app.route("/dc/admin/analytics")
-@dc_admin_required
+@dc_cohort_staff_required
 def dc_admin_analytics():
-    admin, cohortid = dc_admin_with_cohort()
+    staff, cohortid = dc_admin_with_cohort()
     courseid = request.args.get("courseid", type=int) or dc_admin_courseid()
-    ctx = dc_admin_context(
-        "admin_analytics",
-        admin,
-        courseid=courseid,
-        analytics=dq.get_submission_analytics(courseid, cohortid=cohortid),
-    )
+    if is_dc_admin():
+        cohortid = request.args.get("cohortid", type=int)
+    analytics = dq.get_submission_analytics(courseid, cohortid=cohortid)
+    if is_dc_leader():
+        ctx = dc_leader_context(
+            "admin_analytics",
+            staff,
+            courseid=courseid,
+            analytics=analytics,
+        )
+    else:
+        ctx = dc_admin_context(
+            "admin_analytics",
+            staff,
+            courseid=courseid,
+            cohortid=cohortid,
+            analytics=analytics,
+            cross_cohort=dq.get_cross_cohort_engagement(),
+        )
     return render_template("dc/admin_analytics.html", **ctx)
 
 
 @app.route("/dc/admin/students", methods=["GET", "POST"])
-@dc_admin_required
+@dc_cohort_staff_required
 def dc_admin_students():
-    admin, cohortid = dc_admin_with_cohort()
+    staff, cohortid = dc_admin_with_cohort()
+    if is_dc_admin() and cohortid is None:
+        cohortid = request.args.get("cohortid", type=int) or (
+            dq.get_all_cohorts()[0]["cohortid"] if dq.get_all_cohorts() else None
+        )
 
     if request.method == "POST":
         action = request.form.get("action")
@@ -1299,10 +1789,18 @@ def dc_admin_students():
             password = request.form.get("password", "")
             courseid = request.form.get("courseid", type=int)
             bio = request.form.get("bio", "").strip() or None
+            orch_branch = request.form.get("orchestration_branch", "").strip() or None
             if fname and lname and email and password and courseid:
                 pw_hash = hash_password(password)
                 result = dq.create_student(
-                    fname, lname, email, pw_hash, courseid, cohortid, bio
+                    fname,
+                    lname,
+                    email,
+                    pw_hash,
+                    courseid,
+                    cohortid,
+                    bio,
+                    orchestration_branch=orch_branch,
                 )
                 if result:
                     flash("Student created.", "success")
@@ -1324,14 +1822,107 @@ def dc_admin_students():
                 flash("Student removed.", "success")
             else:
                 flash("Could not remove student.", "error")
-        return redirect(url_for("dc_admin_students"))
+        return redirect(url_for("dc_admin_students", cohortid=cohortid))
+
+    if is_dc_leader():
+        ctx = dc_leader_context(
+            "admin_students",
+            staff,
+            students=dq.get_all_students(cohortid=cohortid),
+        )
+    else:
+        ctx = dc_admin_context(
+            "admin_students",
+            staff,
+            cohortid=cohortid,
+            students=dq.get_all_students(cohortid=cohortid),
+        )
+    return render_template("dc/admin_students.html", **ctx)
+
+
+@app.route("/dc/admin/cohorts", methods=["GET", "POST"])
+@dc_platform_admin_required
+def dc_admin_cohorts():
+    admin = dq.get_admin_public(session["user_id"])
+    if not admin:
+        abort(403)
+
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "create_cohort":
+            region = request.form.get("region", "").strip()
+            name = request.form.get("name", "").strip()
+            leader_fname = request.form.get("leader_fname", "").strip()
+            leader_lname = request.form.get("leader_lname", "").strip()
+            leader_email = request.form.get("leader_email", "").strip()
+            leader_password = request.form.get("leader_password", "")
+            leader_bio = request.form.get("leader_bio", "").strip() or None
+            if not region or not name:
+                flash("Cohort name and region are required.", "error")
+            else:
+                pw_hash = (
+                    hash_password(leader_password) if leader_password else None
+                )
+                result = dq.create_cohort_with_leader(
+                    region,
+                    name,
+                    leader_fname or None,
+                    leader_lname or None,
+                    leader_email or None,
+                    pw_hash,
+                    leader_bio,
+                )
+                if result:
+                    if leader_email and not result.get("leader"):
+                        flash(
+                            "Cohort created, but leader was not assigned "
+                            "(duplicate email or cohort already has a leader).",
+                            "error",
+                        )
+                    else:
+                        flash("Cohort created.", "success")
+                else:
+                    flash("Could not create cohort.", "error")
+        elif action == "assign_leader":
+            cohortid = request.form.get("cohortid", type=int)
+            leader_fname = request.form.get("leader_fname", "").strip()
+            leader_lname = request.form.get("leader_lname", "").strip()
+            leader_email = request.form.get("leader_email", "").strip()
+            leader_password = request.form.get("leader_password", "")
+            leader_bio = request.form.get("leader_bio", "").strip() or None
+            if (
+                cohortid
+                and leader_fname
+                and leader_lname
+                and leader_email
+                and leader_password
+            ):
+                result = dq.create_leader(
+                    leader_fname,
+                    leader_lname,
+                    leader_email,
+                    hash_password(leader_password),
+                    cohortid,
+                    leader_bio,
+                )
+                if result:
+                    flash("Cohort leader assigned.", "success")
+                else:
+                    flash(
+                        "Could not assign leader (duplicate email or cohort "
+                        "already has one).",
+                        "error",
+                    )
+            else:
+                flash("All leader fields are required.", "error")
+        return redirect(url_for("dc_admin_cohorts"))
 
     ctx = dc_admin_context(
-        "admin_students",
+        "admin_cohorts",
         admin,
-        students=dq.get_all_students(cohortid=cohortid),
+        cohorts=dq.get_cohorts_with_leaders(),
     )
-    return render_template("dc/admin_students.html", **ctx)
+    return render_template("dc/admin_cohorts.html", **ctx)
 
 
 if __name__ == "__main__":

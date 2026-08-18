@@ -1,0 +1,17 @@
+{# Admin video file upload + transcode status (requires dc_admin_upload.js) #}
+<div class="video-upload-panel"
+     data-videoid="{{ videoid }}"
+     data-upload-url="{{ url_for('dc_admin_video_upload', videoid=videoid) }}"
+     data-status-url="{{ url_for('dc_admin_video_transcode_status', videoid=videoid) }}"
+     data-cancel-url="{{ url_for('dc_admin_video_cancel_transcode', videoid=videoid) }}">
+  <div class="video-upload-controls">
+    <label class="btn btn-secondary btn-sm video-upload-label">
+      Choose video file
+      <input type="file" class="video-file-input" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v,.mpeg,.mpg" hidden>
+    </label>
+    <button type="button" class="btn btn-primary btn-sm video-upload-btn" disabled>Upload &amp; transcode</button>
+    <button type="button" class="btn btn-danger btn-sm video-cancel-btn" hidden>Cancel</button>
+  </div>
+  <p class="video-upload-filename card-meta"></p>
+  <p class="video-upload-status card-meta" aria-live="polite"></p>
+</div>

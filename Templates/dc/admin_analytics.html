@@ -3,8 +3,46 @@
 {% block page_heading %}Submission analytics{% endblock %}
 
 {% block dc_content %}
+{% if user_is_dc_admin and cross_cohort is defined %}
+<section class="card" style="margin-bottom: 1.5rem;">
+  <h2>Cohort overview</h2>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Cohort</th>
+          <th>Learners</th>
+          <th>Avg completion</th>
+          <th>Submission rate</th>
+          <th>Messages (30d)</th>
+          <th>Ungraded</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in cross_cohort %}
+          <tr>
+            <td><strong>{{ row.cohort_name }}</strong></td>
+            <td>{{ row.learner_count or 0 }}</td>
+            <td>{{ row.avg_completion_pct or 0 }}%</td>
+            <td>{{ row.submission_rate or 0 }}%</td>
+            <td>{{ row.messages_30d or 0 }}</td>
+            <td>{{ row.ungraded_count or 0 }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 <p style="color: var(--text-muted); margin-bottom: 1.25rem;">
-  Submission stats for <strong>{{ cohort.name }}</strong> only.
+  {% if user_is_dc_leader %}
+    Submission stats for <strong>{{ cohort.name }}</strong> only.
+  {% elif cohort %}
+    Submission stats for <strong>{{ cohort.name }}</strong>.
+  {% else %}
+    Submission stats across all cohorts.
+  {% endif %}
 </p>
 <form method="get" class="inline-form" style="margin-bottom: 1.5rem;">
   <div class="form-group">
@@ -15,6 +53,17 @@
       {% endfor %}
     </select>
   </div>
+  {% if user_is_dc_admin and all_cohorts %}
+  <div class="form-group">
+    <label for="cohortid">Cohort filter</label>
+    <select id="cohortid" name="cohortid" onchange="this.form.submit()">
+      <option value="">All cohorts</option>
+      {% for co in all_cohorts %}
+        <option value="{{ co.cohortid }}" {% if cohort and co.cohortid == cohort.cohortid %}selected{% endif %}>{{ co.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
 </form>
 
 <h2>By video</h2>

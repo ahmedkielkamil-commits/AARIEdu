@@ -3,8 +3,25 @@
 {% block page_heading %}Manage students{% endblock %}
 
 {% block dc_content %}
+{% if user_is_dc_admin and all_cohorts %}
+<form method="get" class="inline-form" style="margin-bottom: 1rem;">
+  <div class="form-group">
+    <label for="cohortid">Cohort</label>
+    <select id="cohortid" name="cohortid" onchange="this.form.submit()">
+      {% for co in all_cohorts %}
+        <option value="{{ co.cohortid }}" {% if cohort and co.cohortid == cohort.cohortid %}selected{% endif %}>{{ co.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</form>
+{% endif %}
+
 <p style="color: var(--text-muted); margin-bottom: 1.25rem;">
-  Students in <strong>{{ cohort.name }}</strong> ({{ cohort.region }}). New accounts are added to your cohort automatically.
+  {% if user_is_dc_leader %}
+    Learners in <strong>{{ cohort.name }}</strong> ({{ cohort.region }}). New accounts are added to your cohort automatically.
+  {% else %}
+    Students in <strong>{{ cohort.name }}</strong> ({{ cohort.region }}).
+  {% endif %}
 </p>
 
 <section class="teacher-panel">
@@ -36,6 +53,14 @@
           {% endfor %}
         </select>
       </div>
+      <div class="form-group">
+        <label>Orchestration branch (if Data Center Orchestration)</label>
+        <select name="orchestration_branch">
+          <option value="">Choose later on Home</option>
+          <option value="software">Software (weeks 5–6)</option>
+          <option value="hardware">Hardware (weeks 7–8)</option>
+        </select>
+      </div>
     </div>
     <div class="form-group">
       <label>Bio (optional)</label>
@@ -55,6 +80,7 @@
         <th>Name</th>
         <th>Email</th>
         <th>Division</th>
+        <th>Branch</th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -65,6 +91,7 @@
           <td>{{ s.fname }} {{ s.lname }}</td>
           <td>{{ s.email }}</td>
           <td>{{ s.division_name }}</td>
+          <td>{% if s.orchestration_branch %}{{ s.orchestration_branch | capitalize }}{% else %}—{% endif %}</td>
           <td>
             <form method="post" style="display:inline;" onsubmit="return confirm('Remove this student permanently?');">
               <input type="hidden" name="action" value="delete_student">

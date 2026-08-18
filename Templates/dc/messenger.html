@@ -118,7 +118,7 @@
                 <span>{{ msg.sendtime | format_datetime }}</span>
               </div>
               <p class="message-body">{{ msg.content }}</p>
-              {% if user_is_dc_admin %}
+              {% if user_is_dc_cohort_staff %}
                 <form method="post" action="{{ url_for('dc_messenger_delete', channelid=active_channel.channelid) }}" class="message-delete-form">
                   <input type="hidden" name="messagesid" value="{{ msg.messagesid }}">
                   <button type="submit" class="btn btn-sm btn-danger">Delete</button>

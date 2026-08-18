@@ -24,6 +24,20 @@ from sqlalchemy.engine import Connection, Engine
 _engines: dict[str, Engine] = {}
 
 
+_PLACEHOLDER_PASSWORDS = frozenset({"", "your_mysql_password", "password", "changeme"})
+
+
+def mysql_config_hint() -> str | None:
+    """Return a user-facing hint when MySQL env looks misconfigured."""
+    password = os.getenv("MYSQL_PASSWORD", "")
+    if password in _PLACEHOLDER_PASSWORDS:
+        return (
+            "MYSQL_PASSWORD in .env is still a placeholder. "
+            "Set it to the same password you use in MySQL Workbench, then restart Flask."
+        )
+    return None
+
+
 def build_database_url(database: str) -> str:
     user = os.getenv("MYSQL_USER", "root")
     password = quote_plus(os.getenv("MYSQL_PASSWORD", ""))

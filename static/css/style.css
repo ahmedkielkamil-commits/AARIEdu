@@ -312,6 +312,35 @@ p {
   margin-bottom: 0.75rem;
 }
 
+.sidebar-branch-label {
+  display: block;
+  margin-top: 0.35rem;
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.sidebar-branch-label.sidebar-branch-pending {
+  color: var(--warning-text);
+  font-style: italic;
+  text-transform: none;
+  font-weight: 500;
+}
+
+.lesson-branch-tag,
+.dc-week-branch-tag {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--accent-maroon);
+}
+
 .sidebar-course-picker {
   padding: 0 1.25rem 0.75rem;
   margin-bottom: 0.75rem;
@@ -935,6 +964,34 @@ p {
   letter-spacing: 0.08em;
 }
 
+.video-player-wrap {
+  margin-bottom: 1.25rem;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #2a2520;
+}
+
+.video-player {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  background: #000;
+}
+
+.video-unavailable {
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 2rem 1.5rem;
+  margin-bottom: 1.25rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.video-unavailable p {
+  margin: 0 0 0.5rem;
+}
+
 .video-placeholder-note {
   font-family: var(--font-sans);
   font-size: 0.85rem;
@@ -995,6 +1052,47 @@ p {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 1rem;
+}
+
+.roster-cohort-section {
+  margin-bottom: 2.5rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.roster-cohort-section:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.roster-cohort-header {
+  margin-bottom: 1.25rem;
+}
+
+.roster-cohort-header h2 {
+  margin: 0 0 0.25rem;
+}
+
+.roster-subheading {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 0 0 0.75rem;
+}
+
+.roster-leaders-grid {
+  margin-bottom: 1.5rem;
+}
+
+.roster-leaders-grid .roster-card,
+.roster-leader-card {
+  border-color: var(--accent, #8b2942);
+}
+
+.roster-no-leader {
+  margin-bottom: 1.25rem;
 }
 
 .sidebar-divider {
@@ -1229,3 +1327,296 @@ p {
     display: none;
   }
 }
+
+/* ---- DC student home dashboard ---- */
+
+.dc-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.dc-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.dc-section-header h2 {
+  margin-bottom: 0;
+}
+
+.dc-week-path {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.25rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.dc-week-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 4.25rem;
+  padding: 0.5rem 0.4rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-card);
+  text-align: center;
+}
+
+.dc-week-step-num {
+  flex-shrink: 0;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.75rem;
+  background: var(--badge-bg);
+  color: var(--text-muted);
+}
+
+.dc-week-step-label {
+  width: 100%;
+  font-size: 0.65rem;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+.dc-week-step.done {
+  border-color: rgba(45, 90, 45, 0.35);
+  background: var(--success-bg);
+}
+
+.dc-week-step.done .dc-week-step-num {
+  background: var(--success-text);
+  color: #fff;
+}
+
+.dc-week-step.done .dc-week-step-label {
+  color: var(--success-text);
+}
+
+.dc-week-step.current {
+  border-color: var(--accent-maroon);
+  background: rgba(139, 58, 58, 0.06);
+  box-shadow: 0 0 0 1px rgba(139, 58, 58, 0.08);
+}
+
+.dc-week-step.current .dc-week-step-num {
+  background: var(--accent-maroon);
+  color: #fff;
+}
+
+.dc-week-step.current .dc-week-step-label {
+  color: var(--accent-maroon);
+  font-weight: 600;
+}
+
+.dc-message-preview-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.dc-message-preview-list li + li {
+  margin-top: 0.5rem;
+}
+
+.dc-message-preview {
+  display: block;
+  padding: 0.75rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-cream);
+  color: var(--text-primary);
+}
+
+.dc-message-preview:hover {
+  border-color: var(--accent-maroon);
+  text-decoration: none;
+}
+
+.dc-message-preview-meta {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 0.35rem;
+}
+
+.dc-message-preview-body {
+  display: block;
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dc-bio-form textarea {
+  min-height: 6rem;
+}
+
+.dc-branch-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.dc-branch-option {
+  display: block;
+  cursor: pointer;
+}
+
+.dc-branch-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dc-branch-option-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1rem;
+  border-radius: var(--radius);
+  border: 2px solid var(--border-soft);
+  background: var(--bg-cream);
+  min-height: 100%;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dc-branch-option-body strong {
+  font-family: var(--font-serif);
+  color: var(--text-primary);
+}
+
+.dc-branch-option-body span:last-child {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.dc-branch-option input:checked + .dc-branch-option-body {
+  border-color: var(--accent-maroon);
+  background: rgba(139, 58, 58, 0.06);
+}
+
+.dc-branch-option:hover .dc-branch-option-body {
+  border-color: var(--accent-maroon);
+}
+
+@media (max-width: 700px) {
+  .dc-branch-options {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .dc-week-path {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .dc-week-path {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ---- Admin dashboard stats ---- */
+
+.dc-stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin-top: 1rem;
+}
+
+.dc-stat {
+  display: flex;
+  flex-direction: column;
+  min-width: 7rem;
+}
+
+.dc-stat-value {
+  font-family: var(--font-serif);
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--accent-maroon);
+  line-height: 1.1;
+}
+
+.dc-stat-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+/* ---- Admin video upload ---- */
+
+.video-upload-section {
+  margin: 1rem 0;
+  padding: 0.85rem;
+  border-radius: var(--radius);
+  border: 1px dashed var(--border-soft);
+  background: var(--bg-cream);
+}
+
+.video-upload-heading {
+  font-size: 0.95rem;
+  margin: 0 0 0.65rem;
+}
+
+.video-upload-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.video-upload-label {
+  cursor: pointer;
+  margin: 0;
+}
+
+.video-upload-status {
+  margin: 0.5rem 0 0;
+  min-height: 1.25rem;
+}
+
+.video-admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.video-admin-item {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 1rem;
+}
+
+.video-admin-item:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+

@@ -12,8 +12,6 @@ Serves these app pages/features:
   - Admin CRUD (cohorts, students, weeks, videos, passwords)
 
 NOT YET SUPPORTED (no matching schema — do not invent columns):
-  - Video streaming, presigned URLs, or MinIO object upload/download
-    (miniokey strings are stored/returned as-is; object access is elsewhere)
   - Push notifications or read receipts on messages
   - Assignment due dates or late penalties
   - Multiple submission attempts per (student, video) — one row assumed
@@ -43,6 +41,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
 DC_DATABASE = "dccourse"
+ORCHESTRATION_COURSE_ID = 1
 
 _engine: Engine | None = None
 
@@ -157,17 +156,236 @@ def _video_in_course(videoid: int, courseid: int) -> bool:
     return row is not None
 
 
+def is_orchestration_course(courseid: int) -> bool:
+    """Return True if courseid is the Data Center Orchestration track."""
+    return courseid == ORCHESTRATION_COURSE_ID
+
+
+def _curriculum_branch_clause(
+    studentid: int,
+    week_alias: str = "w",
+) -> tuple[str, dict[str, Any]]:
+    """
+    SQL fragment limiting weeks to a student's curriculum path.
+
+    Orchestration students without a branch see shared weeks (1–4) only.
+    """
+    student = get_student_public(studentid)
+    if not student:
+        return "AND 1 = 0", {}
+    if not is_orchestration_course(student["courseid"]):
+        return "", {}
+
+    branch = student.get("orchestration_branch")
+    if branch is None:
+        return f"AND {week_alias}.branch = 'shared'", {}
+    return (
+        f"AND ({week_alias}.branch = 'shared' OR {week_alias}.branch = :orch_branch)",
+        {"orch_branch": branch},
+    )
+
+
+def student_can_access_video(studentid: int, videoid: int) -> bool:
+    """Return True if the video is in the student's division and branch path."""
+    branch_clause, branch_params = _curriculum_branch_clause(studentid)
+    row = _one(
+        f"""
+        SELECT 1 AS ok
+        FROM video v
+        JOIN Week w ON w.weekid = v.weekid
+        JOIN student s ON s.studentid = :studentid AND w.courseid = s.courseid
+        WHERE v.videoid = :videoid
+        {branch_clause}
+        LIMIT 1
+        """,
+        {"studentid": studentid, "videoid": videoid, **branch_params},
+    )
+    return row is not None
+
+
+def student_needs_branch_choice(studentid: int) -> bool:
+    """Orchestration students must pick software or hardware before branch weeks."""
+    student = get_student_public(studentid)
+    if not student or not is_orchestration_course(student["courseid"]):
+        return False
+    return student.get("orchestration_branch") is None
+
+
+def set_orchestration_branch(
+    studentid: int,
+    branch: str,
+) -> dict[str, Any] | None:
+    """Assign software or hardware branch for an orchestration student."""
+    if branch not in ("software", "hardware"):
+        return None
+    student = get_student_public(studentid)
+    if not student or not is_orchestration_course(student["courseid"]):
+        return None
+    rows = _run(
+        """
+        UPDATE student
+        SET orchestration_branch = :branch
+        WHERE studentid = :studentid
+        """,
+        {"studentid": studentid, "branch": branch},
+    )
+    if rows == 0:
+        return None
+    return get_student_public(studentid)
+
+
 # ---------------------------------------------------------------------------
 # Auth (password included for verification only)
 # ---------------------------------------------------------------------------
+
+
+def count_cohort_learners(cohortid: int) -> int:
+    """Count enrolled learners in a cohort."""
+    row = _one(
+        """
+        SELECT COUNT(*) AS cnt FROM student
+        WHERE cohortid = :cohortid
+        """,
+        {"cohortid": cohortid},
+    )
+    return int(row["cnt"]) if row else 0
+
+
+def get_cohorts_with_leaders() -> list[dict[str, Any]]:
+    """Return cohorts with optional assigned leader profile."""
+    return _all(
+        """
+        SELECT co.cohortid, co.region, co.name,
+               l.leaderid, l.fname AS leader_fname, l.lname AS leader_lname,
+               l.email AS leader_email, l.bio AS leader_bio
+        FROM cohort co
+        LEFT JOIN leader l ON l.cohortid = co.cohortid
+        ORDER BY co.name
+        """
+    )
+
+
+def get_leader_for_cohort(cohortid: int) -> dict[str, Any] | None:
+    """Return the cohort leader row without password, or None."""
+    return _one(
+        """
+        SELECT leaderid, fname, lname, email, cohortid, bio
+        FROM leader
+        WHERE cohortid = :cohortid
+        LIMIT 1
+        """,
+        {"cohortid": cohortid},
+    )
+
+
+def get_all_cohorts() -> list[dict[str, Any]]:
+    """Return all cohorts ordered by name."""
+    return _all(
+        """
+        SELECT cohortid, region, name
+        FROM cohort
+        ORDER BY name
+        """
+    )
+
+
+def get_cross_cohort_engagement() -> list[dict[str, Any]]:
+    """
+    Platform-admin dashboard: per-cohort engagement and completion metrics
+    aggregated across all three division tracks.
+    """
+    return _all(
+        """
+        SELECT co.cohortid, co.name AS cohort_name, co.region,
+               learner_stats.learner_count,
+               learner_stats.avg_completion_pct,
+               COALESCE(sub_stats.submission_rate, 0) AS submission_rate,
+               COALESCE(msg_stats.messages_30d, 0) AS messages_30d,
+               COALESCE(sub_stats.ungraded_count, 0) AS ungraded_count
+        FROM cohort co
+        LEFT JOIN (
+            SELECT s.cohortid,
+                   COUNT(DISTINCT s.studentid) AS learner_count,
+                   ROUND(AVG(
+                       CASE WHEN totals.total_videos > 0
+                            THEN 100.0 * COALESCE(watched.watched_videos, 0) / totals.total_videos
+                            ELSE 0 END
+                   )) AS avg_completion_pct
+            FROM student s
+            LEFT JOIN (
+                SELECT s2.studentid,
+                       s2.cohortid,
+                       COUNT(DISTINCT v.videoid) AS total_videos
+                FROM student s2
+                JOIN Week w ON w.courseid = s2.courseid
+                JOIN video v ON v.weekid = w.weekid
+                WHERE (
+                    s2.courseid != :orch_courseid
+                    OR w.branch = 'shared'
+                    OR w.branch = s2.orchestration_branch
+                )
+                GROUP BY s2.studentid, s2.cohortid
+            ) totals ON totals.studentid = s.studentid AND totals.cohortid = s.cohortid
+            LEFT JOIN (
+                SELECT p.studentid,
+                       SUM(CASE WHEN p.watched THEN 1 ELSE 0 END) AS watched_videos
+                FROM progress p
+                GROUP BY p.studentid
+            ) watched ON watched.studentid = s.studentid
+            GROUP BY s.cohortid
+        ) learner_stats ON learner_stats.cohortid = co.cohortid
+        LEFT JOIN (
+            SELECT s.cohortid,
+                   ROUND(
+                       100.0 * COUNT(DISTINCT a.assignmentid)
+                       / NULLIF(COUNT(DISTINCT CONCAT(s.studentid, '-', v.videoid)), 0)
+                   ) AS submission_rate,
+                   SUM(CASE WHEN a.status = 'submitted' THEN 1 ELSE 0 END) AS ungraded_count
+            FROM student s
+            JOIN Week w ON w.courseid = s.courseid
+            JOIN video v ON v.weekid = w.weekid
+            LEFT JOIN assignment a
+                ON a.videoid = v.videoid AND a.studentid = s.studentid
+            WHERE (
+                s.courseid != :orch_courseid
+                OR w.branch = 'shared'
+                OR w.branch = s.orchestration_branch
+            )
+            GROUP BY s.cohortid
+        ) sub_stats ON sub_stats.cohortid = co.cohortid
+        LEFT JOIN (
+            SELECT c.cohortid, COUNT(*) AS messages_30d
+            FROM messages m
+            JOIN channel c ON c.channelid = m.channelid
+            WHERE m.sendtime >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            GROUP BY c.cohortid
+        ) msg_stats ON msg_stats.cohortid = co.cohortid
+        ORDER BY co.name
+        """,
+        {"orch_courseid": ORCHESTRATION_COURSE_ID},
+    )
 
 
 def get_student_by_email(email: str) -> dict[str, Any] | None:
     """Return full student row including password hash for auth verification."""
     return _one(
         """
-        SELECT studentid, fname, lname, email, password, courseid, cohortid, bio
+        SELECT studentid, fname, lname, email, password, courseid, cohortid, bio,
+               orchestration_branch
         FROM student
+        WHERE email = :email
+        LIMIT 1
+        """,
+        {"email": email},
+    )
+
+
+def get_leader_by_email(email: str) -> dict[str, Any] | None:
+    """Return full leader row including password hash for auth verification."""
+    return _one(
+        """
+        SELECT leaderid, fname, lname, email, password, cohortid, bio
+        FROM leader
         WHERE email = :email
         LIMIT 1
         """,
@@ -179,7 +397,7 @@ def get_admin_by_email(email: str) -> dict[str, Any] | None:
     """Return full admin row including password hash for auth verification."""
     return _one(
         """
-        SELECT adminid, fname, lname, email, password, cohortid
+        SELECT adminid, fname, lname, email, password
         FROM admin
         WHERE email = :email
         LIMIT 1
@@ -192,7 +410,8 @@ def get_student_public(studentid: int) -> dict[str, Any] | None:
     """Return student profile without password."""
     return _one(
         """
-        SELECT studentid, fname, lname, email, courseid, cohortid, bio
+        SELECT studentid, fname, lname, email, courseid, cohortid, bio,
+               orchestration_branch
         FROM student
         WHERE studentid = :studentid
         LIMIT 1
@@ -201,11 +420,24 @@ def get_student_public(studentid: int) -> dict[str, Any] | None:
     )
 
 
+def get_leader_public(leaderid: int) -> dict[str, Any] | None:
+    """Return leader profile without password."""
+    return _one(
+        """
+        SELECT leaderid, fname, lname, email, cohortid, bio
+        FROM leader
+        WHERE leaderid = :leaderid
+        LIMIT 1
+        """,
+        {"leaderid": leaderid},
+    )
+
+
 def get_admin_public(adminid: int) -> dict[str, Any] | None:
     """Return admin profile without password."""
     return _one(
         """
-        SELECT adminid, fname, lname, email, cohortid
+        SELECT adminid, fname, lname, email
         FROM admin
         WHERE adminid = :adminid
         LIMIT 1
@@ -225,6 +457,14 @@ def resolve_member_name(member_type: str, member_id: int) -> str | None:
             """
             SELECT fname, lname FROM student
             WHERE studentid = :member_id LIMIT 1
+            """,
+            {"member_id": member_id},
+        )
+    elif member_type == "leader":
+        row = _one(
+            """
+            SELECT fname, lname FROM leader
+            WHERE leaderid = :member_id LIMIT 1
             """,
             {"member_id": member_id},
         )
@@ -276,7 +516,7 @@ def get_weeks_for_course(courseid: int) -> list[dict[str, Any]]:
     """Return all weeks for a division, ordered by week number."""
     return _all(
         """
-        SELECT weekid, courseid, subject, num, description
+        SELECT weekid, courseid, subject, num, description, branch
         FROM Week
         WHERE courseid = :courseid
         ORDER BY num
@@ -285,11 +525,29 @@ def get_weeks_for_course(courseid: int) -> list[dict[str, Any]]:
     )
 
 
+def get_weeks_for_student(studentid: int) -> list[dict[str, Any]]:
+    """Return weeks visible to a student (branch-filtered for orchestration)."""
+    student = get_student_public(studentid)
+    if not student:
+        return []
+    branch_clause, branch_params = _curriculum_branch_clause(studentid)
+    return _all(
+        f"""
+        SELECT weekid, courseid, subject, num, description, branch
+        FROM Week w
+        WHERE w.courseid = :courseid
+        {branch_clause}
+        ORDER BY num
+        """,
+        {"courseid": student["courseid"], **branch_params},
+    )
+
+
 def get_week(weekid: int) -> dict[str, Any] | None:
     """Return a single week row, or None."""
     return _one(
         """
-        SELECT weekid, courseid, subject, num, description
+        SELECT weekid, courseid, subject, num, description, branch
         FROM Week
         WHERE weekid = :weekid
         LIMIT 1
@@ -329,13 +587,33 @@ def get_videos_for_course(courseid: int) -> list[dict[str, Any]]:
     return _all(
         """
         SELECT v.videoid, v.weekid, v.day, v.title, v.miniokey, v.script, v.instructions, v.reflection,
-               w.num AS week_num, w.subject AS week_subject
+               w.num AS week_num, w.subject AS week_subject, w.branch AS week_branch
         FROM video v
         JOIN Week w ON w.weekid = v.weekid
         WHERE w.courseid = :courseid
         ORDER BY w.num, v.day, v.videoid
         """,
         {"courseid": courseid},
+    )
+
+
+def get_videos_for_student(studentid: int) -> list[dict[str, Any]]:
+    """Return videos visible to a student (branch-filtered for orchestration)."""
+    student = get_student_public(studentid)
+    if not student:
+        return []
+    branch_clause, branch_params = _curriculum_branch_clause(studentid, "w")
+    return _all(
+        f"""
+        SELECT v.videoid, v.weekid, v.day, v.title, v.miniokey, v.script, v.instructions, v.reflection,
+               w.num AS week_num, w.subject AS week_subject, w.branch AS week_branch
+        FROM video v
+        JOIN Week w ON w.weekid = v.weekid
+        WHERE w.courseid = :courseid
+        {branch_clause}
+        ORDER BY w.num, v.day, v.videoid
+        """,
+        {"courseid": student["courseid"], **branch_params},
     )
 
 
@@ -387,7 +665,7 @@ def get_all_students(
     return _all(
         f"""
         SELECT s.studentid, s.fname, s.lname, s.email, s.bio,
-               s.courseid, s.cohortid,
+               s.courseid, s.cohortid, s.orchestration_branch,
                c.name AS division_name,
                co.name AS cohort_name, co.region AS cohort_region
         FROM student s
@@ -420,11 +698,16 @@ def get_students_progress_for_course(
         LEFT JOIN progress p
             ON p.videoid = v.videoid AND p.studentid = s.studentid
         WHERE s.courseid = :courseid
+          AND (
+            s.courseid != :orch_courseid
+            OR w.branch = 'shared'
+            OR w.branch = s.orchestration_branch
+          )
           {cohort_clause}
         GROUP BY s.studentid, s.fname, s.lname, s.email
         ORDER BY s.lname, s.fname
         """,
-        params,
+        {**params, "orch_courseid": ORCHESTRATION_COURSE_ID},
     )
 
 
@@ -437,14 +720,33 @@ def get_cohort_roster(cohortid: int) -> list[dict[str, Any]]:
     return _all(
         """
         SELECT s.studentid, s.fname, s.lname, s.email, s.bio,
-               s.courseid, c.name AS division_name
+               s.courseid, c.name AS division_name,
+               co.name AS cohort_name, co.region AS cohort_region
         FROM student s
         JOIN Course c ON c.courseid = s.courseid
+        JOIN cohort co ON co.cohortid = s.cohortid
         WHERE s.cohortid = :cohortid
         ORDER BY c.name, s.lname, s.fname
         """,
         {"cohortid": cohortid},
     )
+
+
+def get_roster_by_cohort() -> list[dict[str, Any]]:
+    """
+    Return every cohort with leaders and learners split for platform admin roster.
+    """
+    grouped: list[dict[str, Any]] = []
+    for cohort in get_all_cohorts():
+        leader = get_leader_for_cohort(cohort["cohortid"])
+        grouped.append(
+            {
+                **cohort,
+                "leaders": [leader] if leader else [],
+                "learners": get_cohort_roster(cohort["cohortid"]),
+            }
+        )
+    return grouped
 
 
 # ---------------------------------------------------------------------------
@@ -529,25 +831,28 @@ def update_last_position(studentid: int, videoid: int, seconds: int) -> dict[str
 
 
 def get_progress_for_student(studentid: int) -> list[dict[str, Any]]:
-    """Return all progress rows for a student (Progress page)."""
+    """Return progress rows for videos in the student's curriculum path."""
+    branch_clause, branch_params = _curriculum_branch_clause(studentid, "w")
     return _all(
-        """
+        f"""
         SELECT p.studentid, p.videoid, p.watched, p.last_position, p.updated_at,
                v.title AS video_title, w.num AS week_num, v.day AS day_num, w.courseid
         FROM progress p
         JOIN video v ON v.videoid = p.videoid
         JOIN Week w ON w.weekid = v.weekid
+        JOIN student s ON s.studentid = p.studentid AND w.courseid = s.courseid
         WHERE p.studentid = :studentid
+        {branch_clause}
         ORDER BY w.num, v.day, v.videoid
         """,
-        {"studentid": studentid},
+        {"studentid": studentid, **branch_params},
     )
 
 
 def get_course_completion(studentid: int) -> dict[str, Any]:
     """
     Return watched vs total video counts and completion percentage for the
-    student's division (courseid).
+    student's division (courseid), respecting orchestration branch paths.
     """
     row = _one(
         """
@@ -560,9 +865,14 @@ def get_course_completion(studentid: int) -> dict[str, Any]:
         LEFT JOIN progress p
             ON p.videoid = v.videoid AND p.studentid = s.studentid
         WHERE s.studentid = :studentid
+          AND (
+            s.courseid != :orch_courseid
+            OR w.branch = 'shared'
+            OR w.branch = s.orchestration_branch
+          )
         GROUP BY s.studentid
         """,
-        {"studentid": studentid},
+        {"studentid": studentid, "orch_courseid": ORCHESTRATION_COURSE_ID},
     )
     if not row or row["total_videos"] == 0:
         return {
@@ -584,9 +894,12 @@ def get_resume_point(studentid: int) -> dict[str, Any] | None:
     Return the most recently updated in-progress video for 'pick up where you left off'.
 
     Prefers unwatched videos with last_position > 0; falls back to latest progress row.
+    Limited to the student's branch curriculum for orchestration.
     """
+    branch_clause, branch_params = _curriculum_branch_clause(studentid, "w")
+    params = {"studentid": studentid, **branch_params}
     row = _one(
-        """
+        f"""
         SELECT p.studentid, p.videoid, p.watched, p.last_position, p.updated_at,
                v.title AS video_title, v.miniokey, w.num AS week_num, v.day AS day_num, w.courseid
         FROM progress p
@@ -596,15 +909,16 @@ def get_resume_point(studentid: int) -> dict[str, Any] | None:
         WHERE p.studentid = :studentid
           AND p.watched = FALSE
           AND p.last_position > 0
+          {branch_clause}
         ORDER BY p.updated_at DESC
         LIMIT 1
         """,
-        {"studentid": studentid},
+        params,
     )
     if row:
         return row
     return _one(
-        """
+        f"""
         SELECT p.studentid, p.videoid, p.watched, p.last_position, p.updated_at,
                v.title AS video_title, v.miniokey, w.num AS week_num, v.day AS day_num, w.courseid
         FROM progress p
@@ -612,10 +926,11 @@ def get_resume_point(studentid: int) -> dict[str, Any] | None:
         JOIN Week w ON w.weekid = v.weekid
         JOIN student s ON s.studentid = p.studentid AND w.courseid = s.courseid
         WHERE p.studentid = :studentid
+          {branch_clause}
         ORDER BY p.updated_at DESC
         LIMIT 1
         """,
-        {"studentid": studentid},
+        params,
     )
 
 
@@ -636,7 +951,7 @@ def submit_assignment(
     the video is not in the student's division track.
     """
     courseid = student_division(studentid)
-    if courseid is None or not _video_in_course(videoid, courseid):
+    if courseid is None or not student_can_access_video(studentid, videoid):
         return None
     if get_student_assignment_for_video(studentid, videoid) is not None:
         return None
@@ -713,18 +1028,22 @@ def get_assignments_for_student(studentid: int) -> list[dict[str, Any]]:
 
     Powers the Assignments / performance reviews page.
     """
+    branch_clause, branch_params = _curriculum_branch_clause(studentid, "w")
     return _all(
-        """
+        f"""
         SELECT a.assignmentid, a.videoid, a.studentid, a.miniokey,
                a.status, a.feedback, a.submitted_at,
-               v.title AS video_title, w.num AS week_num, v.day AS day_num, w.subject AS week_subject
+               v.title AS video_title, w.num AS week_num, v.day AS day_num,
+               w.subject AS week_subject, w.branch AS week_branch
         FROM assignment a
         JOIN video v ON v.videoid = a.videoid
         JOIN Week w ON w.weekid = v.weekid
+        JOIN student s ON s.studentid = a.studentid AND w.courseid = s.courseid
         WHERE a.studentid = :studentid
+        {branch_clause}
         ORDER BY a.submitted_at DESC
         """,
-        {"studentid": studentid},
+        {"studentid": studentid, **branch_params},
     )
 
 
@@ -863,17 +1182,19 @@ def get_channels_for_cohort(cohortid: int) -> list[dict[str, Any]]:
 
 
 def get_member_cohortid(member_type: str, member_id: int) -> int | None:
-    """Return the cohortid for a student or cohort-scoped admin, or None."""
+    """Return the cohortid for a student or leader; platform admins have no cohort."""
     if member_type == "student":
         row = _one(
             "SELECT cohortid FROM student WHERE studentid = :member_id LIMIT 1",
             {"member_id": member_id},
         )
-    elif member_type == "admin":
+    elif member_type == "leader":
         row = _one(
-            "SELECT cohortid FROM admin WHERE adminid = :member_id LIMIT 1",
+            "SELECT cohortid FROM leader WHERE leaderid = :member_id LIMIT 1",
             {"member_id": member_id},
         )
+    elif member_type == "admin":
+        return None
     else:
         return None
     return row["cohortid"] if row else None
@@ -941,11 +1262,14 @@ def _direct_channel_peer_name(
         SELECT cm.member_type, cm.member_id,
                CASE
                    WHEN cm.member_type = 'student' THEN CONCAT(s.fname, ' ', s.lname)
+                   WHEN cm.member_type = 'leader' THEN CONCAT(l.fname, ' ', l.lname)
                    WHEN cm.member_type = 'admin' THEN CONCAT(a.fname, ' ', a.lname)
                END AS member_name
         FROM channel_member cm
         LEFT JOIN student s
             ON cm.member_type = 'student' AND cm.member_id = s.studentid
+        LEFT JOIN leader l
+            ON cm.member_type = 'leader' AND cm.member_id = l.leaderid
         LEFT JOIN admin a
             ON cm.member_type = 'admin' AND cm.member_id = a.adminid
         WHERE cm.channelid = :channelid
@@ -1015,7 +1339,7 @@ def get_cohort_contacts(
     """
     Return cohort members the user can start a direct message with (excludes self).
 
-    Includes students and cohort-scoped admins in the same cohort.
+    Includes learners, cohort leaders, and platform admins with channel membership.
     """
     cohortid = get_member_cohortid(member_type, member_id)
     if cohortid is None:
@@ -1043,14 +1367,23 @@ def get_cohort_contacts(
                 "division_name": row["division_name"],
             }
         )
+    leader = get_leader_for_cohort(cohortid)
+    if leader and not (member_type == "leader" and leader["leaderid"] == member_id):
+        contacts.append(
+            {
+                "member_type": "leader",
+                "member_id": leader["leaderid"],
+                "name": f"{leader['fname']} {leader['lname']}",
+                "email": leader["email"],
+                "division_name": "Cohort leader",
+            }
+        )
     for row in _all(
         """
         SELECT 'admin' AS member_type, adminid AS member_id, fname, lname, email
         FROM admin
-        WHERE cohortid = :cohortid
         ORDER BY lname, fname
         """,
-        {"cohortid": cohortid},
     ):
         if member_type == "admin" and row["member_id"] == member_id:
             continue
@@ -1060,7 +1393,7 @@ def get_cohort_contacts(
                 "member_id": row["member_id"],
                 "name": f"{row['fname']} {row['lname']}",
                 "email": row["email"],
-                "division_name": "Admin",
+                "division_name": "Platform admin",
             }
         )
     return contacts
@@ -1108,9 +1441,25 @@ def get_channels_for_member(member_type: str, member_id: int) -> dict[str, Any]:
         general["display_name"] = "General"
         result["general"] = general
 
-    if member_type == "student":
+    if member_type == "leader" or member_type == "admin":
+        divisions = _all(
+            """
+            SELECT c.channelid, c.cohortid, c.type, c.name
+            FROM channel c
+            WHERE c.cohortid = :cohortid AND c.type = 'division'
+            ORDER BY c.name
+            """,
+            {"cohortid": cohortid},
+        )
+        for div in divisions:
+            div["display_name"] = div["name"]
+            result["division"].append(div)
+    elif member_type == "student":
         row = _one(
-            "SELECT courseid FROM student WHERE studentid = :member_id LIMIT 1",
+            """
+            SELECT courseid FROM student
+            WHERE studentid = :member_id LIMIT 1
+            """,
             {"member_id": member_id},
         )
         if row:
@@ -1129,19 +1478,6 @@ def get_channels_for_member(member_type: str, member_id: int) -> dict[str, Any]:
             if div:
                 div["display_name"] = div["name"]
                 result["division"].append(div)
-    else:
-        divisions = _all(
-            """
-            SELECT c.channelid, c.cohortid, c.type, c.name
-            FROM channel c
-            WHERE c.cohortid = :cohortid AND c.type = 'division'
-            ORDER BY c.name
-            """,
-            {"cohortid": cohortid},
-        )
-        for div in divisions:
-            div["display_name"] = div["name"]
-            result["division"].append(div)
 
     direct_rows = _all(
         """
@@ -1163,6 +1499,87 @@ def get_channels_for_member(member_type: str, member_id: int) -> dict[str, Any]:
         result["direct"].append(ch)
 
     return result
+
+
+def get_recent_messages_for_member(
+    member_type: str,
+    member_id: int,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """
+    Return the most recent messages across channels the member can access
+    (cohort general, division/direct memberships).
+    """
+    cohortid = get_member_cohortid(member_type, member_id)
+    if cohortid is None:
+        return _all(
+            """
+            SELECT m.messagesid, m.channelid, m.sender_type, m.sender_id,
+                   m.content, m.sendtime,
+                   CASE
+                       WHEN m.sender_type = 'student' THEN CONCAT(s.fname, ' ', s.lname)
+                       WHEN m.sender_type = 'leader' THEN CONCAT(l.fname, ' ', l.lname)
+                       WHEN m.sender_type = 'admin' THEN CONCAT(a.fname, ' ', a.lname)
+                   END AS sender_name,
+                   c.type AS channel_type,
+                   COALESCE(c.name, 'Direct message') AS channel_name
+            FROM messages m
+            JOIN channel c ON c.channelid = m.channelid
+            JOIN channel_member cm
+                ON cm.channelid = c.channelid
+               AND cm.member_type = :member_type
+               AND cm.member_id = :member_id
+            LEFT JOIN student s
+                ON m.sender_type = 'student' AND m.sender_id = s.studentid
+            LEFT JOIN leader l
+                ON m.sender_type = 'leader' AND m.sender_id = l.leaderid
+            LEFT JOIN admin a
+                ON m.sender_type = 'admin' AND m.sender_id = a.adminid
+            ORDER BY m.sendtime DESC
+            LIMIT :limit
+            """,
+            {"member_type": member_type, "member_id": member_id, "limit": limit},
+        )
+
+    return _all(
+        """
+        SELECT m.messagesid, m.channelid, m.sender_type, m.sender_id,
+               m.content, m.sendtime,
+               CASE
+                   WHEN m.sender_type = 'student' THEN CONCAT(s.fname, ' ', s.lname)
+                   WHEN m.sender_type = 'leader' THEN CONCAT(l.fname, ' ', l.lname)
+                   WHEN m.sender_type = 'admin' THEN CONCAT(a.fname, ' ', a.lname)
+               END AS sender_name,
+               c.type AS channel_type,
+               COALESCE(c.name, 'Direct message') AS channel_name
+        FROM messages m
+        JOIN channel c ON c.channelid = m.channelid
+        LEFT JOIN student s
+            ON m.sender_type = 'student' AND m.sender_id = s.studentid
+        LEFT JOIN leader l
+            ON m.sender_type = 'leader' AND m.sender_id = l.leaderid
+        LEFT JOIN admin a
+            ON m.sender_type = 'admin' AND m.sender_id = a.adminid
+        WHERE c.cohortid = :cohortid
+          AND (
+            c.type = 'general'
+            OR EXISTS (
+                SELECT 1 FROM channel_member cm
+                WHERE cm.channelid = c.channelid
+                  AND cm.member_type = :member_type
+                  AND cm.member_id = :member_id
+            )
+          )
+        ORDER BY m.sendtime DESC
+        LIMIT :limit
+        """,
+        {
+            "cohortid": cohortid,
+            "member_type": member_type,
+            "member_id": member_id,
+            "limit": limit,
+        },
+    )
 
 
 def get_messages_for_channel(
@@ -1187,11 +1604,14 @@ def get_messages_for_channel(
                m.content, m.sendtime,
                CASE
                    WHEN m.sender_type = 'student' THEN CONCAT(s.fname, ' ', s.lname)
+                   WHEN m.sender_type = 'leader' THEN CONCAT(l.fname, ' ', l.lname)
                    WHEN m.sender_type = 'admin' THEN CONCAT(a.fname, ' ', a.lname)
                END AS sender_name
         FROM messages m
         LEFT JOIN student s
             ON m.sender_type = 'student' AND m.sender_id = s.studentid
+        LEFT JOIN leader l
+            ON m.sender_type = 'leader' AND m.sender_id = l.leaderid
         LEFT JOIN admin a
             ON m.sender_type = 'admin' AND m.sender_id = a.adminid
         WHERE m.channelid = :channelid
@@ -1215,7 +1635,7 @@ def post_message(
     The caller must ensure (sender_type, sender_id) references a real student
     or admin row, and that the sender is authorized to post in the channel.
     """
-    if sender_type not in ("student", "admin"):
+    if sender_type not in ("student", "leader", "admin"):
         return None
     messagesid = _insert(
         """
@@ -1284,18 +1704,17 @@ def get_channel_members(channelid: int) -> list[dict[str, Any]]:
             {"cohortid": cohortid},
         ):
             members.append(dict(row))
-        for row in _all(
-            """
-            SELECT 'admin' AS member_type, adminid AS member_id,
-                   CONCAT(fname, ' ', lname) AS member_name,
-                   email, 'Admin' AS division_name
-            FROM admin
-            WHERE cohortid = :cohortid
-            ORDER BY lname, fname
-            """,
-            {"cohortid": cohortid},
-        ):
-            members.append(dict(row))
+        leader = get_leader_for_cohort(cohortid)
+        if leader:
+            members.append(
+                {
+                    "member_type": "leader",
+                    "member_id": leader["leaderid"],
+                    "member_name": f"{leader['fname']} {leader['lname']}",
+                    "email": leader["email"],
+                    "division_name": "Cohort leader",
+                }
+            )
         return members
 
     return _all(
@@ -1303,19 +1722,24 @@ def get_channel_members(channelid: int) -> list[dict[str, Any]]:
         SELECT cm.channelid, cm.member_type, cm.member_id,
                CASE
                    WHEN cm.member_type = 'student' THEN CONCAT(s.fname, ' ', s.lname)
+                   WHEN cm.member_type = 'leader' THEN CONCAT(l.fname, ' ', l.lname)
                    WHEN cm.member_type = 'admin' THEN CONCAT(a.fname, ' ', a.lname)
                END AS member_name,
                CASE
                    WHEN cm.member_type = 'student' THEN s.email
+                   WHEN cm.member_type = 'leader' THEN l.email
                    WHEN cm.member_type = 'admin' THEN a.email
                END AS email,
                CASE
                    WHEN cm.member_type = 'student' THEN co.name
-                   ELSE 'Admin'
+                   WHEN cm.member_type = 'leader' THEN 'Cohort leader'
+                   ELSE 'Platform admin'
                END AS division_name
         FROM channel_member cm
         LEFT JOIN student s
             ON cm.member_type = 'student' AND cm.member_id = s.studentid
+        LEFT JOIN leader l
+            ON cm.member_type = 'leader' AND cm.member_id = l.leaderid
         LEFT JOIN admin a
             ON cm.member_type = 'admin' AND cm.member_id = a.adminid
         LEFT JOIN Course co ON co.courseid = s.courseid
@@ -1338,7 +1762,11 @@ def create_direct_channel(
 
     The caller must ensure both (type, id) pairs reference real rows.
     """
-    if member_a_type not in ("student", "admin") or member_b_type not in ("student", "admin"):
+    if member_a_type not in ("student", "leader", "admin") or member_b_type not in (
+        "student",
+        "leader",
+        "admin",
+    ):
         return None
 
     channelid = _insert(
@@ -1375,15 +1803,44 @@ def create_direct_channel(
 # ---------------------------------------------------------------------------
 
 
-def get_all_cohorts() -> list[dict[str, Any]]:
-    """Return all cohorts ordered by cohortid."""
-    return _all(
+def _email_in_use(email: str) -> bool:
+    """Return True if email exists on student, leader, or admin."""
+    for table, col in (("student", "studentid"), ("leader", "leaderid"), ("admin", "adminid")):
+        row = _one(
+            f"SELECT {col} AS id FROM `{table}` WHERE email = :email LIMIT 1",
+            {"email": email},
+        )
+        if row:
+            return True
+    return False
+
+
+def enroll_leader_in_cohort_channels(leaderid: int, cohortid: int) -> None:
+    """Add a cohort leader to general and all division channels."""
+    general_id = _general_channel_for_cohort(cohortid)
+    if general_id is not None:
+        enroll_leader_in_channel(general_id, leaderid)
+    for row in _all(
         """
-        SELECT cohortid, region, name
-        FROM cohort
-        ORDER BY cohortid
+        SELECT channelid FROM channel
+        WHERE cohortid = :cohortid AND type = 'division'
+        """,
+        {"cohortid": cohortid},
+    ):
+        enroll_leader_in_channel(row["channelid"], leaderid)
+
+
+def enroll_leader_in_channel(channelid: int, leaderid: int) -> bool:
+    if is_channel_member(channelid, "leader", leaderid):
+        return False
+    _insert(
         """
+        INSERT INTO channel_member (channelid, member_type, member_id)
+        VALUES (:channelid, 'leader', :member_id)
+        """,
+        {"channelid": channelid, "member_id": leaderid},
     )
+    return True
 
 
 def create_cohort(region: str, name: str) -> dict[str, Any] | None:
@@ -1412,6 +1869,123 @@ def create_cohort(region: str, name: str) -> dict[str, Any] | None:
             {"cohortid": cohortid, "name": course["name"]},
         )
     return get_cohort(cohortid)
+
+
+def create_leader(
+    fname: str,
+    lname: str,
+    email: str,
+    password_hash: str,
+    cohortid: int,
+    bio: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Create a cohort leader (no division track). One leader per cohort.
+    Returns None if email is duplicate or cohort already has a leader.
+    """
+    if _email_in_use(email):
+        return None
+    if get_leader_for_cohort(cohortid):
+        return None
+
+    leaderid = _insert(
+        """
+        INSERT INTO leader (fname, lname, email, password, cohortid, bio)
+        VALUES (:fname, :lname, :email, :password, :cohortid, :bio)
+        """,
+        {
+            "fname": fname,
+            "lname": lname,
+            "email": email,
+            "password": password_hash,
+            "cohortid": cohortid,
+            "bio": bio,
+        },
+    )
+    enroll_leader_in_cohort_channels(leaderid, cohortid)
+    return get_leader_public(leaderid)
+
+
+def create_cohort_with_leader(
+    region: str,
+    name: str,
+    leader_fname: str | None = None,
+    leader_lname: str | None = None,
+    leader_email: str | None = None,
+    leader_password_hash: str | None = None,
+    leader_bio: str | None = None,
+) -> dict[str, Any] | None:
+    """Create a cohort and optionally assign its leader in one step."""
+    cohort = create_cohort(region, name)
+    if not cohort:
+        return None
+    if (
+        leader_fname
+        and leader_lname
+        and leader_email
+        and leader_password_hash
+    ):
+        leader = create_leader(
+            leader_fname,
+            leader_lname,
+            leader_email,
+            leader_password_hash,
+            cohort["cohortid"],
+            leader_bio,
+        )
+        cohort["leader"] = leader
+    return cohort
+
+
+def update_leader_profile(
+    leaderid: int,
+    fname: str,
+    lname: str,
+    email: str,
+    bio: str | None = None,
+) -> dict[str, Any] | None:
+    rows = _run(
+        """
+        UPDATE leader
+        SET fname = :fname, lname = :lname, email = :email, bio = :bio
+        WHERE leaderid = :leaderid
+        """,
+        {
+            "leaderid": leaderid,
+            "fname": fname,
+            "lname": lname,
+            "email": email,
+            "bio": bio,
+        },
+    )
+    if rows == 0:
+        return None
+    return get_leader_public(leaderid)
+
+
+def reset_leader_password(
+    leaderid: int,
+    password_hash: str,
+    cohortid: int | None = None,
+) -> bool:
+    params: dict[str, Any] = {
+        "leaderid": leaderid,
+        "password": password_hash,
+    }
+    cohort_clause = ""
+    if cohortid is not None:
+        cohort_clause = "AND cohortid = :cohortid"
+        params["cohortid"] = cohortid
+    return (
+        _run(
+            f"""
+            UPDATE leader SET password = :password
+            WHERE leaderid = :leaderid {cohort_clause}
+            """,
+            params,
+        )
+        > 0
+    )
 
 
 def _general_channel_for_cohort(cohortid: int) -> int | None:
@@ -1450,6 +2024,7 @@ def create_student(
     courseid: int,
     cohortid: int,
     bio: str | None = None,
+    orchestration_branch: str | None = None,
 ) -> dict[str, Any] | None:
     """
     Create a student with an already-bcrypt-hashed password.
@@ -1457,17 +2032,18 @@ def create_student(
     Adds them to the cohort general channel and their division channel.
     Returns None if email is duplicate.
     """
-    existing = _one(
-        "SELECT studentid FROM student WHERE email = :email LIMIT 1",
-        {"email": email},
-    )
-    if existing:
+    if _email_in_use(email):
         return None
+
+    branch: str | None = None
+    if is_orchestration_course(courseid):
+        if orchestration_branch in ("software", "hardware"):
+            branch = orchestration_branch
 
     studentid = _insert(
         """
-        INSERT INTO student (fname, lname, email, password, courseid, cohortid, bio)
-        VALUES (:fname, :lname, :email, :password, :courseid, :cohortid, :bio)
+        INSERT INTO student (fname, lname, email, password, courseid, cohortid, bio, orchestration_branch)
+        VALUES (:fname, :lname, :email, :password, :courseid, :cohortid, :bio, :orchestration_branch)
         """,
         {
             "fname": fname,
@@ -1477,6 +2053,7 @@ def create_student(
             "courseid": courseid,
             "cohortid": cohortid,
             "bio": bio,
+            "orchestration_branch": branch,
         },
     )
 
@@ -1698,6 +2275,21 @@ def update_video(
             "instructions": instructions,
             "reflection": reflection,
         },
+    )
+    if rows == 0:
+        return None
+    return get_video(videoid)
+
+
+def update_video_miniokey(videoid: int, miniokey: str) -> dict[str, Any] | None:
+    """Update only the MinIO object key for a video (after transcode upload)."""
+    rows = _run(
+        """
+        UPDATE video
+        SET miniokey = :miniokey
+        WHERE videoid = :videoid
+        """,
+        {"videoid": videoid, "miniokey": miniokey},
     )
     if rows == 0:
         return None

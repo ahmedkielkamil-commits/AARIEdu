@@ -72,13 +72,23 @@ DC = {
             "extra_on_create": None,
         },
         {
+            "role": "leader",
+            "table": "leader",
+            "id_col": "leaderid",
+            "email": "test.leader@aari.org",
+            "fname": "Test",
+            "lname": "Leader",
+            "extra_insert": {"cohortid": 1},
+            "extra_on_create": None,
+        },
+        {
             "role": "admin",
             "table": "admin",
             "id_col": "adminid",
             "email": "test.admin@aari.org",
             "fname": "Test",
             "lname": "Admin",
-            "extra_insert": {"cohortid": 1},
+            "extra_insert": {},
             "extra_on_create": None,
         },
     ],
@@ -122,6 +132,40 @@ def upsert_account(database: str, password_hash: str, account: dict) -> int:
         return account_id
 
     extra = account.get("extra_insert") or {}
+
+    # One leader per cohort — reuse the slot if seed data already assigned someone.
+    if table == "leader" and extra.get("cohortid") is not None:
+        cohort_leader = fetch_one(
+            """
+            SELECT leaderid AS id FROM leader
+            WHERE cohortid = :cohortid LIMIT 1
+            """,
+            {"cohortid": extra["cohortid"]},
+            database=database,
+        )
+        if cohort_leader:
+            account_id = cohort_leader["id"]
+            execute(
+                """
+                UPDATE leader
+                SET fname = :fname, lname = :lname, email = :email, password = :password
+                WHERE leaderid = :account_id
+                """,
+                {
+                    "fname": account["fname"],
+                    "lname": account["lname"],
+                    "email": email,
+                    "password": password_hash,
+                    "account_id": account_id,
+                },
+                database=database,
+            )
+            print(
+                f"Updated cohort {extra['cohortid']} leader as test {account['role']} "
+                f"(leaderid={account_id})."
+            )
+            return account_id
+
     if table == "student":
         account_id = execute_insert(
             """
@@ -138,10 +182,10 @@ def upsert_account(database: str, password_hash: str, account: dict) -> int:
             },
             database=database,
         )
-    elif table == "admin":
+    elif table == "leader":
         account_id = execute_insert(
             """
-            INSERT INTO admin (fname, lname, email, password, cohortid)
+            INSERT INTO leader (fname, lname, email, password, cohortid)
             VALUES (:fname, :lname, :email, :password, :cohortid)
             """,
             {
@@ -150,6 +194,20 @@ def upsert_account(database: str, password_hash: str, account: dict) -> int:
                 "email": email,
                 "password": password_hash,
                 "cohortid": extra["cohortid"],
+            },
+            database=database,
+        )
+    elif table == "admin":
+        account_id = execute_insert(
+            """
+            INSERT INTO admin (fname, lname, email, password)
+            VALUES (:fname, :lname, :email, :password)
+            """,
+            {
+                "fname": account["fname"],
+                "lname": account["lname"],
+                "email": email,
+                "password": password_hash,
             },
             database=database,
         )
@@ -187,7 +245,7 @@ def reset_all_passwords(database: str, password_hash: str, suite: str) -> None:
     if suite == "robotics":
         tables = ("students", "teacher")
     else:
-        tables = ("student", "admin")
+        tables = ("student", "leader", "admin")
 
     for table in tables:
         count = execute(

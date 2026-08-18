@@ -8,6 +8,9 @@
     All lab submissions for {{ course.name }} in your cohort — grade pending items from the lesson or analytics pages.
   {% else %}
     Performance reviews and written feedback on your graded lab submissions.
+    {% if orchestration_branch %}
+      <span class="badge" style="margin-left: 0.35rem;">{{ orchestration_branch | branch_label }}</span>
+    {% endif %}
   {% endif %}
 </p>
 
@@ -15,7 +18,11 @@
   {% for a in assignments %}
     <article class="card">
       <div class="card-meta">
-        Week {{ a.week_num }} · Day {{ a.day_num }} · {{ a.video_title }}
+        Week {{ a.week_num }} · Day {{ a.day_num }}
+        {% if a.week_branch and a.week_branch != 'shared' %}
+          · {{ a.week_branch | branch_label }}
+        {% endif %}
+        · {{ a.video_title }}
         {% if admin_assignments_view %}
           · {{ a.fname }} {{ a.lname }}
         {% endif %}

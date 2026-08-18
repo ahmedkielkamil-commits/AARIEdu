@@ -3,31 +3,84 @@
 {% block page_heading %}Roster{% endblock %}
 
 {% block dc_content %}
-<p style="color: var(--text-muted); margin-bottom: 1.25rem;">
-  {% if user_is_dc_admin %}
-    Cohort members in {{ cohort.name }}, their division tracks, and short bios.
-  {% else %}
-    Cohort members, their division tracks, and short bios.
-  {% endif %}
-</p>
+{% macro member_card(member, is_leader=false) %}
+  <article class="card roster-card{% if is_leader %} roster-leader-card{% endif %}">
+    <h3 style="margin-bottom: 0.25rem;">{{ member.fname }} {{ member.lname }}</h3>
+    <p class="card-meta" style="margin-bottom: 0.75rem;">
+      {% if is_leader or member.leaderid %}
+        <span class="badge badge-warning">Cohort leader</span>
+      {% elif member.division_name %}
+        <span class="badge">{{ member.division_name }}</span>
+      {% endif %}
+    </p>
+      {% if member.cohort_name and not user_is_dc_admin and not roster_by_cohort %}
+        <span class="badge">{{ member.cohort_name }}</span>
+      {% endif %}
+    </p>
+    {% if member.bio %}
+      <p style="margin: 0; white-space: pre-wrap;">{{ member.bio }}</p>
+    {% else %}
+      <p class="instructor-placeholder" style="margin: 0;">No bio yet.</p>
+    {% endif %}
+  </article>
+{% endmacro %}
 
-{% if roster %}
+{% if roster_by_cohort %}
+  <p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+    All cohorts, their leaders, and learners across division tracks.
+  </p>
+
+  {% for group in roster_by_cohort %}
+    <section class="roster-cohort-section">
+      <header class="roster-cohort-header">
+        <h2>{{ group.name }}</h2>
+        <p class="card-meta">{{ group.region }} · {{ group.learners|length }} learner{{ 's' if group.learners|length != 1 else '' }}</p>
+      </header>
+
+      {% if group.leaders %}
+        <h3 class="roster-subheading">Cohort leader{{ 's' if group.leaders|length != 1 else '' }}</h3>
+        <div class="roster-grid roster-leaders-grid">
+          {% for leader in group.leaders %}
+            {{ member_card(leader, is_leader=true) }}
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="instructor-placeholder roster-no-leader">No cohort leader assigned.</p>
+      {% endif %}
+
+      {% if group.learners %}
+        <h3 class="roster-subheading">Learners</h3>
+        <div class="roster-grid">
+          {% for member in group.learners %}
+            {{ member_card(member) }}
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="instructor-placeholder">No learners in this cohort yet.</p>
+      {% endif %}
+    </section>
+  {% else %}
+    <p class="empty-state">No cohorts found.</p>
+  {% endfor %}
+
+{% elif roster %}
+  <p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+    {% if user_is_dc_leader %}
+      Members of {{ cohort.name }}, their division tracks, and short bios.
+    {% else %}
+      Cohort members, their division tracks, and short bios.
+    {% endif %}
+  </p>
+  {% if cohort_leader %}
+    <h3 class="roster-subheading">Cohort leader</h3>
+    <div class="roster-grid roster-leaders-grid" style="margin-bottom: 1.5rem;">
+      {{ member_card(cohort_leader, is_leader=true) }}
+    </div>
+    <h3 class="roster-subheading">Learners</h3>
+  {% endif %}
   <div class="roster-grid">
     {% for member in roster %}
-      <article class="card roster-card">
-        <h3 style="margin-bottom: 0.25rem;">{{ member.fname }} {{ member.lname }}</h3>
-        <p class="card-meta" style="margin-bottom: 0.75rem;">
-          <span class="badge">{{ member.division_name }}</span>
-          {% if member.cohort_name and not user_is_dc_admin %}
-            <span class="badge">{{ member.cohort_name }}</span>
-          {% endif %}
-        </p>
-        {% if member.bio %}
-          <p style="margin: 0; white-space: pre-wrap;">{{ member.bio }}</p>
-        {% else %}
-          <p class="instructor-placeholder" style="margin: 0;">No bio yet.</p>
-        {% endif %}
-      </article>
+      {{ member_card(member) }}
     {% endfor %}
   </div>
 {% else %}

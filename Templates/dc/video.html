@@ -7,10 +7,20 @@
 {% endblock %}
 
 {% block dc_content %}
-<div class="video-placeholder" aria-label="Video player placeholder">
-  <span>VIDEO PLACEHOLDER</span>
-  <p class="video-placeholder-note">Streaming via MinIO — not wired yet (TODO)</p>
+{% if stream_url %}
+<div class="video-player-wrap">
+  <video class="video-player" controls playsinline preload="metadata" src="{{ stream_url }}">
+    Your browser does not support embedded video.
+  </video>
 </div>
+{% else %}
+<div class="video-unavailable" aria-label="Video not available">
+  <p>Video not available yet.</p>
+  {% if user_is_dc_admin %}
+  <p class="card-meta">Upload and transcode a lesson file in <a href="{{ url_for('dc_admin_weeks', courseid=courseid) }}">Manage weeks</a>.</p>
+  {% endif %}
+</div>
+{% endif %}
 
 <p class="card-meta">Week {{ week.num }} · Day {{ video.day }} · Taught by {{ course.teacher }}</p>
 
@@ -38,7 +48,7 @@
   <p style="white-space: pre-wrap; margin: 0; color: var(--text-muted); font-size: 0.95rem;">{{ video.script }}</p>
 </div>
 
-{% if not user_is_dc_admin %}
+{% if not user_is_dc_cohort_staff %}
 <form method="post" class="inline-form" style="margin-bottom: 1.5rem;">
   <input type="hidden" name="action" value="mark_watched">
   <button type="submit" class="btn btn-secondary btn-sm"
@@ -66,7 +76,7 @@
       <p class="instructor-placeholder">Awaiting review.</p>
     {% endif %}
     <p class="card-meta">File key: {{ assignment.miniokey }}</p>
-  {% elif not user_is_dc_admin %}
+  {% elif not user_is_dc_cohort_staff %}
     <p class="exit-ticket-note">
       Upload your deliverable for this lesson. Enter a placeholder object key for now —
       real MinIO upload is a later enhancement.

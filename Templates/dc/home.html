@@ -1,0 +1,116 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Home{% endblock %}
+
+{% block dc_content %}
+<div class="dc-dashboard">
+  {% if needs_branch_choice %}
+  <section class="card dc-branch-choice">
+    <h2>Choose your path</h2>
+    <p class="card-meta" style="margin-bottom: 1rem;">
+      After the shared foundation (weeks 1–4), orchestration splits into a software or hardware branch for weeks 5–6 (software) or 7–8 (hardware).
+    </p>
+    <form method="post" class="dc-branch-form">
+      <input type="hidden" name="action" value="branch">
+      <div class="dc-branch-options">
+        <label class="dc-branch-option">
+          <input type="radio" name="orchestration_branch" value="software" required>
+          <span class="dc-branch-option-body">
+            <strong>Software branch</strong>
+            <span>JavaScript, HTML/CSS, Express, MySQL — build the monitoring dashboard.</span>
+          </span>
+        </label>
+        <label class="dc-branch-option">
+          <input type="radio" name="orchestration_branch" value="hardware">
+          <span class="dc-branch-option-body">
+            <strong>Hardware branch</strong>
+            <span>Rack design, spine-leaf networking, cooling, and facility security.</span>
+          </span>
+        </label>
+      </div>
+      <button type="submit" class="btn btn-primary" style="margin-top: 1rem;">Confirm branch</button>
+    </form>
+  </section>
+  {% endif %}
+
+  {% if next_video %}
+  <section class="card dc-next-lesson">
+    <h2>Continue learning</h2>
+    {% if week_path %}
+    <ol class="dc-week-path" aria-label="Your course path">
+      {% for step in week_path %}
+        <li class="dc-week-step {% if step.all_watched %}done{% elif step.is_current %}current{% endif %}"
+            title="Week {{ step.week.num }}: {{ step.week.subject }}">
+          <span class="dc-week-step-num" aria-hidden="true">{{ step.week.num }}</span>
+          <span class="dc-week-step-label">
+            {{ step.week.subject }}
+            {% if step.week.branch and step.week.branch != 'shared' %}
+              <span class="dc-week-branch-tag">{{ step.week.branch | branch_label }}</span>
+            {% endif %}
+          </span>
+        </li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+    <p><strong>{{ next_video.video_title }}</strong></p>
+    <p class="card-meta">
+      Week {{ next_video.week_num }} · Day {{ next_video.day_num }}
+      {% if next_video.last_position and next_video.last_position > 0 %}
+        · resume at {{ next_video.last_position }}s
+      {% endif %}
+    </p>
+    {% if next_video.watched %}
+      <p class="card-meta">You have finished every lesson — review or revisit anytime.</p>
+      <a href="{{ url_for('dc_video', videoid=next_video.videoid) }}" class="btn btn-secondary">Review lesson</a>
+    {% else %}
+      <a href="{{ url_for('dc_video', videoid=next_video.videoid) }}" class="btn btn-primary">Start lesson</a>
+    {% endif %}
+  </section>
+  {% else %}
+  <section class="card">
+    <h2>Continue learning</h2>
+    <p class="empty-state">No lessons are available in your track yet.</p>
+    <a href="{{ url_for('dc_about') }}" class="btn btn-secondary">About the program</a>
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <div class="dc-section-header">
+      <h2>Recent messages</h2>
+      <a href="{{ url_for('dc_messenger') }}" class="btn btn-sm btn-secondary">View all</a>
+    </div>
+    {% if recent_messages %}
+      <ul class="dc-message-preview-list">
+        {% for msg in recent_messages %}
+          <li>
+            <a href="{{ url_for('dc_messenger', channelid=msg.channelid) }}" class="dc-message-preview">
+              <span class="dc-message-preview-meta">
+                <strong>{{ msg.sender_name or 'Unknown' }}</strong>
+                · {{ msg.channel_name }}
+                · {{ msg.sendtime | format_datetime }}
+              </span>
+              <span class="dc-message-preview-body">{{ msg.content }}</span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty-state">No messages yet. Say hello in Messenger.</p>
+      <a href="{{ url_for('dc_messenger') }}" class="btn btn-secondary">Open Messenger</a>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Your bio</h2>
+    <p class="card-meta" style="margin-bottom: 1rem;">Shown on your cohort roster. Keep it short — a sentence or two is plenty.</p>
+    <form method="post" class="dc-bio-form">
+      <input type="hidden" name="action" value="bio">
+      <div class="form-group">
+        <label for="bio">Bio</label>
+        <textarea id="bio" name="bio" rows="4" placeholder="A short intro for your cohort…">{{ profile.bio or '' }}</textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Save bio</button>
+    </form>
+  </section>
+</div>
+{% endblock %}

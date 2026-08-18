@@ -4,7 +4,12 @@
   {% if lesson_rail %}
     {% for group in lesson_rail %}
       <div class="lesson-week">
-        <div class="lesson-week-label">Week {{ group.week.num }} · {{ group.week.subject }}</div>
+        <div class="lesson-week-label">
+          Week {{ group.week.num }} · {{ group.week.subject }}
+          {% if group.week.branch and group.week.branch != 'shared' %}
+            <span class="lesson-branch-tag">{{ group.week.branch | branch_label }}</span>
+          {% endif %}
+        </div>
         <ul class="lesson-list">
           {% for v in group.videos %}
             <li class="lesson-item {% if v.current %}lesson-current{% endif %}">

@@ -14,9 +14,16 @@
   </nav>
 
   <aside class="course-sidebar">
-    <div class="sidebar-course-title">{{ course.name if course else 'Data Center' }}</div>
-    {% if user_is_dc_admin and all_courses %}
-    <form method="get" action="{{ url_for('dc_home') }}" class="sidebar-course-picker">
+    <div class="sidebar-course-title">
+      {{ course.name if course else 'Data Center' }}
+      {% if orchestration_branch %}
+        <span class="sidebar-branch-label">{{ orchestration_branch | branch_label }}</span>
+      {% elif not user_is_dc_cohort_staff and courseid == 1 and not orchestration_branch %}
+        <span class="sidebar-branch-label sidebar-branch-pending">Branch not chosen</span>
+      {% endif %}
+    </div>
+    {% if (user_is_dc_admin or user_is_dc_leader) and all_courses %}
+    <form method="get" action="{{ request.path }}" class="sidebar-course-picker">
       <label for="dc-courseid" class="sr-only">Division track</label>
       <select id="dc-courseid" name="courseid" onchange="this.form.submit()">
         {% for c in all_courses %}
@@ -27,6 +34,8 @@
     {% endif %}
     <nav class="sidebar-nav">
       <a href="{{ url_for('dc_home') }}"
+         class="{% if sidebar_active == 'home' %}active{% endif %}">Home</a>
+      <a href="{{ url_for('dc_content') }}"
          class="{% if sidebar_active == 'content' %}active{% endif %}">Course Content</a>
       <a href="{{ url_for('dc_assignments') }}"
          class="{% if sidebar_active == 'assignments' %}active{% endif %}">Assignments</a>
@@ -42,14 +51,23 @@
          class="{% if sidebar_active == 'about' %}active{% endif %}">About</a>
       <a href="{{ url_for('dc_calls') }}"
          class="{% if sidebar_active == 'calls' %}active{% endif %}">Call Access</a>
+      {% if user_is_dc_leader %}
+        <hr class="sidebar-divider">
+        <a href="{{ url_for('dc_admin_analytics') }}"
+           class="{% if sidebar_active == 'admin_analytics' %}active{% endif %}">Analytics</a>
+        <a href="{{ url_for('dc_admin_students') }}"
+           class="{% if sidebar_active == 'admin_students' %}active{% endif %}">Manage students</a>
+      {% endif %}
       {% if user_is_dc_admin %}
         <hr class="sidebar-divider">
+        <a href="{{ url_for('dc_admin_cohorts') }}"
+           class="{% if sidebar_active == 'admin_cohorts' %}active{% endif %}">Manage cohorts</a>
         <a href="{{ url_for('dc_admin_weeks') }}"
            class="{% if sidebar_active == 'admin_weeks' %}active{% endif %}">Manage weeks</a>
         <a href="{{ url_for('dc_admin_analytics') }}"
            class="{% if sidebar_active == 'admin_analytics' %}active{% endif %}">Analytics</a>
         <a href="{{ url_for('dc_admin_students') }}"
-           class="{% if sidebar_active == 'admin_students' %}active{% endif %}">Manage students</a>
+           class="{% if sidebar_active == 'admin_students' %}active{% endif %}">Students</a>
       {% endif %}
     </nav>
   </aside>
@@ -58,8 +76,10 @@
     <header class="course-topbar">
       <span class="topbar-user">
         {% if current_user_name %}{{ current_user_name }}{% endif %}
-        {% if user_is_dc_admin %}<span class="badge">Admin</span>{% endif %}
+        {% if user_is_dc_admin %}<span class="badge">Platform admin</span>{% endif %}
+        {% if user_is_dc_leader %}<span class="badge">Cohort leader</span>{% endif %}
         {% if cohort %}<span class="badge">{{ cohort.name }}</span>{% endif %}
+        {% if orchestration_branch %}<span class="badge">{{ orchestration_branch | branch_label }}</span>{% endif %}
       </span>
       <span>
         <a href="{{ url_for('dc_account') }}">Account</a>
@@ -80,7 +100,7 @@
 
         <div class="course-header">
           <h1>{% block page_heading %}{{ course.name if course else 'Data Center' }}{% endblock %}</h1>
-          {% if progress_pct is defined and not user_is_dc_admin %}
+          {% if progress_pct is defined and not user_is_dc_cohort_staff %}
             <div class="progress-bar" role="progressbar"
                  aria-valuenow="{{ progress_pct }}" aria-valuemin="0" aria-valuemax="100">
               <div class="progress-fill" style="width: {{ progress_pct }}%;"></div>
@@ -96,4 +116,5 @@
     </div>
   </div>
 </div>
+{% block dc_scripts %}{% endblock %}
 {% endblock %}

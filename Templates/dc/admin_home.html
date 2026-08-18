@@ -1,0 +1,83 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Platform admin home{% endblock %}
+
+{% block dc_content %}
+<div class="dc-dashboard">
+  <section class="card dc-admin-stats">
+    <h2>All division tracks</h2>
+    <p class="card-meta">Course authoring and cross-cohort analytics · currently viewing <strong>{{ course.name }}</strong></p>
+    <div class="dc-stat-row">
+      <div class="dc-stat">
+        <span class="dc-stat-value">{{ video_count }}</span>
+        <span class="dc-stat-label">Lessons in track</span>
+      </div>
+      <div class="dc-stat">
+        <span class="dc-stat-value">{{ total_ungraded }}</span>
+        <span class="dc-stat-label">Ungraded (all cohorts)</span>
+      </div>
+      <div class="dc-stat">
+        <span class="dc-stat-value">{{ cross_cohort|length }}</span>
+        <span class="dc-stat-label">Active cohorts</span>
+      </div>
+    </div>
+    <p style="margin: 1rem 0 0;">
+      <a href="{{ url_for('dc_admin_weeks', courseid=courseid) }}" class="btn btn-primary btn-sm">Manage weeks &amp; videos</a>
+      <a href="{{ url_for('dc_admin_analytics', courseid=courseid) }}" class="btn btn-secondary btn-sm">Analytics</a>
+      <a href="{{ url_for('dc_admin_students') }}" class="btn btn-secondary btn-sm">Students</a>
+    </p>
+  </section>
+
+  {% if cross_cohort %}
+  <section class="card">
+    <h2>Cohort engagement</h2>
+    <p class="card-meta">Completion, submission rate, and messenger activity across cohorts.</p>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Cohort</th>
+            <th>Learners</th>
+            <th>Avg completion</th>
+            <th>Submission rate</th>
+            <th>Messages (30d)</th>
+            <th>Ungraded</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in cross_cohort %}
+            <tr>
+              <td><strong>{{ row.cohort_name }}</strong> · {{ row.region }}</td>
+              <td>{{ row.learner_count or 0 }}</td>
+              <td>{{ row.avg_completion_pct or 0 }}%</td>
+              <td>{{ row.submission_rate or 0 }}%</td>
+              <td>{{ row.messages_30d or 0 }}</td>
+              <td>{{ row.ungraded_count or 0 }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if week_path %}
+  <section class="card">
+    <h2>Course outline · {{ course.name }}</h2>
+    <ol class="dc-week-path" aria-label="Division track weeks">
+      {% for step in week_path %}
+        <li class="dc-week-step">
+          <span class="dc-week-step-num" aria-hidden="true">{{ step.week.num }}</span>
+          <span class="dc-week-step-label">
+            {{ step.week.subject }}
+            {% if step.week.branch and step.week.branch != 'shared' %}
+              <span class="dc-week-branch-tag">{{ step.week.branch | branch_label }}</span>
+            {% endif %}
+          </span>
+        </li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,100 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Cohort leader home{% endblock %}
+
+{% block dc_content %}
+<div class="dc-dashboard">
+  <section class="card dc-admin-stats">
+    <h2>{{ cohort.name }}</h2>
+    <p class="card-meta">Cohort leader · {{ cohort.region }} · viewing <strong>{{ course.name }}</strong></p>
+    <div class="dc-stat-row">
+      <div class="dc-stat">
+        <span class="dc-stat-value">{{ student_count }}</span>
+        <span class="dc-stat-label">Learners in cohort</span>
+      </div>
+      <div class="dc-stat">
+        <span class="dc-stat-value">{{ video_count }}</span>
+        <span class="dc-stat-label">Lessons in track</span>
+      </div>
+      <div class="dc-stat">
+        <span class="dc-stat-value">{{ total_ungraded }}</span>
+        <span class="dc-stat-label">Awaiting grade</span>
+      </div>
+    </div>
+    <p style="margin: 1rem 0 0;">
+      <a href="{{ url_for('dc_admin_analytics', courseid=courseid) }}" class="btn btn-primary btn-sm">Analytics</a>
+      <a href="{{ url_for('dc_admin_students') }}" class="btn btn-secondary btn-sm">Manage students</a>
+      <a href="{{ url_for('dc_messenger') }}" class="btn btn-secondary btn-sm">Messenger</a>
+    </p>
+  </section>
+
+  {% if week_path %}
+  <section class="card">
+    <h2>Course outline</h2>
+    <ol class="dc-week-path" aria-label="Division track weeks">
+      {% for step in week_path %}
+        <li class="dc-week-step">
+          <span class="dc-week-step-num" aria-hidden="true">{{ step.week.num }}</span>
+          <span class="dc-week-step-label">
+            {{ step.week.subject }}
+            {% if step.week.branch and step.week.branch != 'shared' %}
+              <span class="dc-week-branch-tag">{{ step.week.branch | branch_label }}</span>
+            {% endif %}
+          </span>
+        </li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <div class="dc-section-header">
+      <h2>Grade queue</h2>
+      <a href="{{ url_for('dc_admin_analytics', courseid=courseid) }}" class="btn btn-sm btn-secondary">View all</a>
+    </div>
+    {% if ungraded_queue %}
+      <ul class="dc-message-preview-list">
+        {% for row in ungraded_queue %}
+          <li>
+            <a href="{{ url_for('dc_admin_grade_video', videoid=row.videoid) }}" class="dc-message-preview">
+              <span class="dc-message-preview-meta">
+                Week {{ row.week_num }} · Day {{ row.day_num }}
+                · {{ row.ungraded_count }} ungraded
+              </span>
+              <span class="dc-message-preview-body">{{ row.video_title }}</span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty-state">No submissions waiting for review.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <div class="dc-section-header">
+      <h2>Recent messages</h2>
+      <a href="{{ url_for('dc_messenger') }}" class="btn btn-sm btn-secondary">View all</a>
+    </div>
+    {% if recent_messages %}
+      <ul class="dc-message-preview-list">
+        {% for msg in recent_messages %}
+          <li>
+            <a href="{{ url_for('dc_messenger', channelid=msg.channelid) }}" class="dc-message-preview">
+              <span class="dc-message-preview-meta">
+                <strong>{{ msg.sender_name or 'Unknown' }}</strong>
+                · {{ msg.channel_name }}
+                · {{ msg.sendtime | format_datetime }}
+              </span>
+              <span class="dc-message-preview-body">{{ msg.content }}</span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty-state">No messages yet.</p>
+      <a href="{{ url_for('dc_messenger') }}" class="btn btn-secondary">Open Messenger</a>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
