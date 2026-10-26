@@ -6,12 +6,12 @@
 {% if is_instructor %}
 <div class="teacher-panel">
   <h3>Add week</h3>
-  <p class="card-meta">Lecture days and slides are managed in the database seed or admin tooling. New weeks start empty until days are added.</p>
+  <p class="card-meta">New weeks start empty — open "Edit week &amp; days" under a week to add its lecture days.</p>
   <form method="post" class="inline-form">
     <input type="hidden" name="action" value="create">
     <div class="form-group">
       <label>Week #</label>
-      <input type="number" name="num" min="1" max="99" required>
+      <input type="number" name="num" min="1" max="99" required value="{{ (weeks | length) + 1 }}">
     </div>
     <div class="form-group">
       <label>Title</label>
@@ -40,7 +40,7 @@
               {% if is_instructor %}
                 <a href="{{ url_for('course_week_tickets', courseid=courseid, weekid=w.weekid) }}"
                    class="btn btn-secondary btn-sm module-week-retention"
-                   onclick="event.stopPropagation();">Retention</a>
+                   onclick="event.stopPropagation();">Exit tickets</a>
               {% endif %}
             </span>
           </summary>
@@ -81,7 +81,7 @@
 
         {% if is_instructor %}
         <details class="module-instructor-edit">
-          <summary>Edit week</summary>
+          <summary>Edit week &amp; days</summary>
           <form method="post" style="margin-top:0.75rem;">
             <input type="hidden" name="action" value="update">
             <input type="hidden" name="weekid" value="{{ w.weekid }}">
@@ -97,11 +97,42 @@
               <button type="submit" class="btn btn-secondary btn-sm">Update</button>
             </div>
           </form>
-          <form method="post" style="margin-top:0.5rem;" onsubmit="return confirm('Delete this week and all its days?');">
+          <form method="post" style="margin-top:0.5rem;" onsubmit="return confirm('Delete this week, all its days, and their exit tickets?');">
             <input type="hidden" name="action" value="delete">
             <input type="hidden" name="weekid" value="{{ w.weekid }}">
             <button type="submit" class="btn btn-danger btn-sm">Delete week</button>
           </form>
+
+          {% for d in w.days %}
+            <details class="module-day-edit">
+              <summary>Edit Day {{ d.num }} · {{ d.title }}</summary>
+              <form method="post" class="day-edit-form">
+                <input type="hidden" name="action" value="update_day">
+                <input type="hidden" name="dayid" value="{{ d.dayid }}">
+                {% set prefix = 'day' ~ d.dayid %}
+                {% set day_values = d %}
+                {% include "course/_day_fields.html" %}
+                <button type="submit" class="btn btn-secondary btn-sm">Save day</button>
+              </form>
+              <form method="post" style="margin-top:0.5rem;" onsubmit="return confirm('Delete this day and its exit tickets?');">
+                <input type="hidden" name="action" value="delete_day">
+                <input type="hidden" name="dayid" value="{{ d.dayid }}">
+                <button type="submit" class="btn btn-danger btn-sm">Delete day</button>
+              </form>
+            </details>
+          {% endfor %}
+
+          <details class="module-day-edit" {% if not w.days %}open{% endif %}>
+            <summary>+ Add a day to Week {{ w.num }}</summary>
+            <form method="post" class="day-edit-form">
+              <input type="hidden" name="action" value="create_day">
+              <input type="hidden" name="weekid" value="{{ w.weekid }}">
+              {% set prefix = 'new' ~ w.weekid %}
+              {% set day_values = {'num': (w.days | length) + 1} %}
+              {% include "course/_day_fields.html" %}
+              <button type="submit" class="btn btn-primary btn-sm">Add day</button>
+            </form>
+          </details>
         </details>
         {% endif %}
       </li>

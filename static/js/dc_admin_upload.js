@@ -1,4 +1,88 @@
 (function () {
+  var CHUNK_RETRIES = 3;
+
+  // Proxy error pages (413, 502…) are HTML, not JSON; report the HTTP status instead.
+  function readJson(res) {
+    return res.text().then(function (text) {
+      var data = null;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (e) {
+        throw new Error("Server returned HTTP " + res.status + " (" + (res.statusText || "error") + ").");
+      }
+      if (!res.ok) {
+        throw new Error(data.error || "Server returned HTTP " + res.status + ".");
+      }
+      return data;
+    });
+  }
+
+  function postJson(url, body, signal) {
+    return fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+      signal: signal,
+    }).then(readJson);
+  }
+
+  function sendChunk(url, blob, signal, attempt) {
+    return fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: blob,
+      signal: signal,
+    })
+      .then(readJson)
+      .catch(function (err) {
+        if (err.name === "AbortError" || attempt >= CHUNK_RETRIES) {
+          throw err;
+        }
+        return new Promise(function (resolve) {
+          setTimeout(resolve, 1500 * attempt);
+        }).then(function () {
+          return sendChunk(url, blob, signal, attempt + 1);
+        });
+      });
+  }
+
+  function formatMb(bytes) {
+    return (bytes / (1024 * 1024)).toFixed(0) + " MB";
+  }
+
+  function chunkedUpload(panel, state, file, statusEl) {
+    var startUrl = panel.dataset.uploadStartUrl;
+    var baseUrl = startUrl.replace(/start$/, "");
+    var signal = state.uploadAbort.signal;
+
+    return postJson(startUrl, { filename: file.name, size: file.size }, signal).then(function (session) {
+      state.uploadSession = baseUrl + session.upload_id;
+      var chunkSize = session.chunk_size;
+
+      function next(offset) {
+        if (offset >= file.size) {
+          return postJson(state.uploadSession + "/finish", {}, signal);
+        }
+        var end = Math.min(offset + chunkSize, file.size);
+        statusEl.textContent =
+          "Uploading… " + Math.floor((offset / file.size) * 100) + "% (" +
+          formatMb(offset) + " of " + formatMb(file.size) + ")";
+        return sendChunk(
+          state.uploadSession + "/chunk?offset=" + offset,
+          file.slice(offset, end),
+          signal,
+          1
+        ).then(function () {
+          return next(end);
+        });
+      }
+
+      return next(0);
+    });
+  }
+
   function statusLabel(data) {
     if (data.status === "processing") {
       if (data.phase === "queued") {
@@ -62,9 +146,7 @@
     if (!url || !statusEl) return;
 
     fetch(url, { credentials: "same-origin" })
-      .then(function (res) {
-        return res.json();
-      })
+      .then(readJson)
       .then(function (data) {
         var text = statusLabel(data);
         if (data.hint) {
@@ -114,6 +196,10 @@
       state.uploadAbort.abort();
       state.uploadAbort = null;
     }
+    if (state.uploadSession) {
+      fetch(state.uploadSession + "/abort", { method: "POST", credentials: "same-origin" });
+      state.uploadSession = null;
+    }
 
     if (cancelBtn) {
       cancelBtn.disabled = true;
@@ -150,7 +236,7 @@
     var filenameEl = panel.querySelector(".video-upload-filename");
     var statusEl = panel.querySelector(".video-upload-status");
     var uploadUrl = panel.dataset.uploadUrl;
-    var state = { pollTimer: null, uploadAbort: null, uploading: false };
+    var state = { pollTimer: null, uploadAbort: null, uploadSession: null, uploading: false };
 
     if (!fileInput || !uploadBtn || !uploadUrl) return;
 
@@ -173,26 +259,12 @@
       setBusy(panel, true);
       statusEl.textContent = "Uploading…";
 
-      var formData = new FormData();
-      formData.append("video", file);
       state.uploadAbort = new AbortController();
 
-      fetch(uploadUrl, {
-        method: "POST",
-        body: formData,
-        credentials: "same-origin",
-        signal: state.uploadAbort.signal,
-      })
-        .then(function (res) {
-          return res.json().then(function (data) {
-            return { ok: res.ok, data: data };
-          });
-        })
-        .then(function (result) {
+      chunkedUpload(panel, state, file, statusEl)
+        .then(function () {
           state.uploadAbort = null;
-          if (!result.ok) {
-            throw new Error(result.data.error || "Upload failed");
-          }
+          state.uploadSession = null;
           statusEl.textContent = "Processing…";
           fileInput.value = "";
           filenameEl.textContent = "";
@@ -203,7 +275,11 @@
           if (err.name === "AbortError") {
             return;
           }
-          statusEl.textContent = err.message || "Upload failed.";
+          if (state.uploadSession) {
+            fetch(state.uploadSession + "/abort", { method: "POST", credentials: "same-origin" });
+            state.uploadSession = null;
+          }
+          statusEl.textContent = "Upload failed: " + (err.message || "unknown error");
           finishBusy(panel, state);
         });
     });

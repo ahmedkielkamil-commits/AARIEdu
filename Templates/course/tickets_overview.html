@@ -1,0 +1,48 @@
+{% extends "robotics_layout.html" %}
+
+{% block page_heading %}Exit Tickets{% endblock %}
+
+{% block course_content %}
+<p style="color: var(--text-muted); margin-bottom: 1.5rem;">
+  Ungraded exit ticket signal for all {{ roster_size }} enrolled student{{ '' if roster_size == 1 else 's' }}.
+  Open a week to see who submitted each day and view their files.
+</p>
+
+{% if weeks %}
+<div class="table-wrap card" style="padding:0; overflow:hidden;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Week</th>
+        <th>Days</th>
+        <th>Submitted</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in weeks %}
+        {% set possible = w.day_count * roster_size %}
+        <tr>
+          <td>Week {{ w.num }} · {{ w.title }}</td>
+          <td>{{ w.day_count }}</td>
+          <td>
+            {% if possible %}
+              <span class="badge {% if w.submitted >= possible %}badge-success{% elif w.submitted %}badge-warning{% endif %}">
+                {{ w.submitted }} / {{ possible }}
+              </span>
+            {% else %}
+              <span class="card-meta">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <a href="{{ url_for('course_week_tickets', courseid=courseid, weekid=w.weekid) }}">View week →</a>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+  <p class="empty-state">No weeks published yet.</p>
+{% endif %}
+{% endblock %}

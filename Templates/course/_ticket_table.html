@@ -1,0 +1,38 @@
+{% set rows = group.rows if group is defined else day_rows %}
+<div class="table-wrap card" style="padding:0; overflow:hidden; margin-bottom: 1.5rem;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Student</th>
+        <th>Status</th>
+        <th>File</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.fname }} {{ row.lname }}</td>
+          <td>
+            {% if row.submitted %}
+              <span class="badge badge-success">Submitted</span>
+            {% else %}
+              <span class="badge badge-warning">Not yet</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.miniokey %}
+              <a href="{{ url_for('course_ticket_attachment', courseid=courseid, ticketid=row.ticketid) }}"
+                 target="_blank" rel="noopener noreferrer">{{ row.miniokey | attachment_name }}</a>
+            {% elif row.submitted %}
+              <span class="card-meta">No file</span>
+            {% else %}
+              <span class="card-meta">—</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3" class="card-meta">No students enrolled.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

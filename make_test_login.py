@@ -3,8 +3,8 @@
 Insert (or update) test accounts with real bcrypt passwords for local dev.
 
 Usage:
-  python make_test_login.py --suite robotics   # robcourse student
-  python make_test_login.py --suite dc         # dccourse student + admin
+  python make_test_login.py --suite robotics   # highschool student
+  python make_test_login.py --suite dc         # bootcamp student + admin
 
 Login password comes from TEST_PASSWORD in .env (default: 123123).
 
@@ -32,7 +32,7 @@ except ImportError:
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from db import execute, execute_insert, fetch_one, get_connection
+from db import execute, execute_insert, fetch_all, fetch_one, get_connection
 
 
 DEFAULT_TEST_PASSWORD = "123123"
@@ -43,7 +43,7 @@ def get_test_password() -> str:
 
 
 ROBOTICS = {
-    "database": "robcourse",
+    "database": "highschool",
     "accounts": [
         {
             "role": "student",
@@ -59,7 +59,7 @@ ROBOTICS = {
 }
 
 DC = {
-    "database": "dccourse",
+    "database": "bootcamp",
     "accounts": [
         {
             "role": "student",
@@ -229,13 +229,14 @@ def upsert_account(database: str, password_hash: str, account: dict) -> int:
     print(f"Inserted new test {account['role']} ({id_col}={account_id}).")
 
     if account.get("extra_on_create") == "enroll_robotics":
-        for courseid in (1, 2, 3):
+        courses = fetch_all("SELECT courseid FROM Course", database=database)
+        for course in courses:
             execute_insert(
                 "INSERT INTO class (studentid, courseid) VALUES (:studentid, :courseid)",
-                {"studentid": account_id, "courseid": courseid},
+                {"studentid": account_id, "courseid": course["courseid"]},
                 database=database,
             )
-        print("Enrolled test student in all 3 robotics courses.")
+        print(f"Enrolled test student in {len(courses)} high school course(s).")
 
     return account_id
 
@@ -271,7 +272,7 @@ def main() -> None:
     parser.add_argument(
         "--database",
         default=None,
-        help="Override database name (default: robcourse or dccourse by suite)",
+        help="Override database name (default: highschool or bootcamp by suite)",
     )
     parser.add_argument(
         "--reset-all",

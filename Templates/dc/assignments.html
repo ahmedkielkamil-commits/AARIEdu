@@ -33,13 +33,25 @@
         </span>
         <span class="card-meta" style="margin-left: 0.5rem;">{{ a.submitted_at | format_datetime }}</span>
       </p>
+      {% if a.status == 'submitted' %}
+        <p class="instructor-placeholder" style="margin: 0;">
+          {% if a.feedback %}Resubmitted{% else %}Submitted{% endif %} — awaiting review.
+        </p>
+      {% endif %}
       {% if a.feedback %}
-        <p style="margin: 0; white-space: pre-wrap;"><strong>Feedback:</strong> {{ a.feedback }}</p>
-      {% elif a.status == 'submitted' %}
-        <p class="instructor-placeholder" style="margin: 0;">Submitted — awaiting review.</p>
+        <p style="margin: 0; white-space: pre-wrap;">
+          <strong>{% if a.status == 'submitted' %}Previous feedback:{% else %}Feedback:{% endif %}</strong> {{ a.feedback }}
+        </p>
+      {% endif %}
+      {% if not admin_assignments_view and a.status == 'unsatisfactory' %}
+        <p style="margin: 0.5rem 0 0;">
+          <a href="{{ url_for('dc_video', videoid=a.videoid) }}">Upload a revised file →</a>
+        </p>
       {% endif %}
       <p style="margin: 0.75rem 0 0;">
         <a href="{{ url_for('dc_video', videoid=a.videoid) }}">View lesson →</a>
+        · <a href="{{ url_for('dc_assignment_file', assignmentid=a.assignmentid) }}"
+             target="_blank" rel="noopener noreferrer">View file</a>
         {% if admin_assignments_view and a.status == 'submitted' %}
           · <a href="{{ url_for('dc_admin_grade_video', videoid=a.videoid) }}">Grade →</a>
         {% endif %}

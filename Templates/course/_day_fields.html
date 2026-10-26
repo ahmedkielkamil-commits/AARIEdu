@@ -1,0 +1,22 @@
+<div class="inline-form">
+  <div class="form-group">
+    <label for="{{ prefix }}-num">Day #</label>
+    <input type="number" id="{{ prefix }}-num" name="num" min="1" max="99" required value="{{ day_values.num or '' }}">
+  </div>
+  <div class="form-group" style="flex: 1;">
+    <label for="{{ prefix }}-title">Title</label>
+    <input type="text" id="{{ prefix }}-title" name="title" required maxlength="255" value="{{ day_values.title or '' }}">
+  </div>
+</div>
+<div class="form-group">
+  <label for="{{ prefix }}-description">Description (optional)</label>
+  <input type="text" id="{{ prefix }}-description" name="description" maxlength="255" value="{{ day_values.description or '' }}">
+</div>
+<div class="form-group">
+  <label for="{{ prefix }}-assignment">Exit ticket — what students submit (optional)</label>
+  <textarea id="{{ prefix }}-assignment" name="assignment" rows="3">{{ day_values.assignment or '' }}</textarea>
+</div>
+<div class="form-group">
+  <label for="{{ prefix }}-slidelink">Google Slides link (optional)</label>
+  <input type="url" id="{{ prefix }}-slidelink" name="slidelink" maxlength="255" placeholder="https://docs.google.com/presentation/…" value="{{ day_values.slidelink or '' }}">
+</div>

@@ -6,9 +6,11 @@ Single shared client — import from here; do not create additional MinIO connec
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import timedelta
 from functools import lru_cache
+from io import BytesIO
 from pathlib import Path
 
 try:
@@ -20,6 +22,8 @@ except ImportError:
 
 from minio import Minio
 from minio.error import S3Error
+
+logger = logging.getLogger(__name__)
 
 _client: Minio | None = None
 
@@ -110,6 +114,38 @@ def upload_file(
     return object_key
 
 
+def upload_bytes(
+    data: bytes,
+    object_key: str,
+    *,
+    content_type: str = "application/octet-stream",
+) -> str:
+    """Upload an in-memory object to MinIO. Returns the object key."""
+    ensure_bucket()
+    client = get_client()
+    client.put_object(
+        get_bucket(),
+        object_key,
+        BytesIO(data),
+        length=len(data),
+        content_type=content_type,
+    )
+    return object_key
+
+
+def download_file(object_key: str, local_path: str | Path) -> Path:
+    """Download an object from MinIO to a local path. Returns the path."""
+    path = Path(local_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    get_client().fget_object(get_bucket(), object_key, str(path))
+    return path
+
+
+def open_object(object_key: str):
+    """Return a streaming response for an object; caller must close() and release_conn()."""
+    return get_client().get_object(get_bucket(), object_key)
+
+
 def presigned_get_url(object_key: str, *, expires_seconds: int = 3600) -> str:
     """Return a presigned GET URL for an object (playback / download)."""
     client = get_client()
@@ -126,4 +162,7 @@ def object_exists(object_key: str) -> bool:
         get_client().stat_object(get_bucket(), object_key)
         return True
     except S3Error:
+        return False
+    except Exception as err:
+        logger.warning("MinIO unavailable while checking %s: %s", object_key, err)
         return False

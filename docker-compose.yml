@@ -12,7 +12,7 @@ services:
       - "${MYSQL_PORT:-3306}:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-robcourse}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-highschool}
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:

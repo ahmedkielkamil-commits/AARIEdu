@@ -1,17 +1,20 @@
 {% extends "base.html" %}
 
-{% block title %}{{ course.title }} · AARI Robotics{% endblock %}
+{% block title %}{{ course.title }} · AARI High School{% endblock %}
 
 {% block body %}
 <div class="course-shell">
   <nav class="course-rail" aria-label="Your courses">
-    <a href="{{ url_for('student_home') if not user_is_instructor else url_for('course_home', courseid=courseid) }}"
-       class="course-monogram rail-home" title="Home">A</a>
+    <a href="{{ url_for('teacher_home') if user_is_instructor else url_for('student_home') }}"
+       class="course-monogram rail-home" title="{{ 'All courses' if user_is_instructor else 'Home' }}">A</a>
     {% for c in enrolled_courses %}
       <a href="{{ url_for('course_home', courseid=c.courseid) }}"
          class="course-monogram {% if c.courseid == courseid %}active{% endif %}"
          title="{{ c.title }}">{{ monogram(c.title) }}</a>
     {% endfor %}
+    {% if user_is_instructor %}
+      <a href="{{ url_for('teacher_home') }}#title" class="course-monogram" title="Create a course">+</a>
+    {% endif %}
   </nav>
 
   <aside class="course-sidebar">
@@ -26,8 +29,10 @@
       <a href="{{ url_for('course_modules', courseid=courseid) }}"
          class="{% if sidebar_active == 'modules' %}active{% endif %}">Modules</a>
       <a href="{{ url_for('course_instructor', courseid=courseid) }}"
-         class="{% if sidebar_active == 'instructor' %}active{% endif %}">Instructor</a>
+         class="{% if sidebar_active == 'instructor' %}active{% endif %}">Instructors</a>
       {% if is_instructor %}
+        <a href="{{ url_for('course_tickets', courseid=courseid) }}"
+           class="{% if sidebar_active == 'tickets' %}active{% endif %}">Exit Tickets</a>
         <a href="{{ url_for('course_roster', courseid=courseid) }}"
            class="{% if sidebar_active == 'roster' %}active{% endif %}">Roster</a>
       {% endif %}

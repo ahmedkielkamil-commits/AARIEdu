@@ -6,3 +6,7 @@ python-dotenv>=1.0
 minio>=7.2
 redis>=5.0
 rq>=1.16
+PyMuPDF>=1.24
+requests>=2.31
+msal>=1.28
+gunicorn>=22.0

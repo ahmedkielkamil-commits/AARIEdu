@@ -7,9 +7,10 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from functools import wraps
-from pathlib import Path
+from urllib.parse import quote, urlencode, urlparse
 
 import bcrypt
+import requests
 from flask import (
     Flask,
     abort,
@@ -20,25 +21,29 @@ from flask import (
     request,
     session,
     url_for,
+    Response,
 )
-from werkzeug.utils import secure_filename
-
+from werkzeug.middleware.proxy_fix import ProxyFix
 import dcqueries as dq
+import documents as lesson_documents
+import miniIO
 import roboticsqueries as rq
 import streaming as video_streaming
+import submissions as student_submissions
 from db import mysql_config_hint
+from documents import DocumentError
 from streaming import StreamingAuthError
+from submissions import SubmissionError
 
 app = Flask(__name__, template_folder="Templates", static_folder="static")
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-change-me-in-production")
+if os.getenv("BEHIND_PROXY", "").lower() in ("1", "true", "yes"):
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    app.config["SESSION_COOKIE_SECURE"] = True
 
 _mysql_hint = mysql_config_hint()
 if _mysql_hint:
     print(f"\n*** MySQL config: {_mysql_hint}\n")
-
-UPLOAD_DIR = Path(app.static_folder) / "uploads" / "exittickets"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp", "pdf"}
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +74,7 @@ def dc_login_required(view):
     def wrapped(*args, **kwargs):
         if "user_id" not in session or session.get("suite") != "dc":
             flash("Please log in to the data center program.", "error")
-            return redirect(url_for("login", next=request.url))
+            return redirect(url_for("dc_login", next=request.url))
         return view(*args, **kwargs)
 
     return wrapped
@@ -143,7 +148,21 @@ def dc_video_stream_url(videoid: int) -> str | None:
                 return video_streaming.get_video_stream_url(videoid, student)
     except StreamingAuthError:
         return None
+    except Exception:
+        return None
     return None
+
+
+def dc_can_read_document(videoid: int) -> bool:
+    """Lesson PDFs follow the same access rules as lesson video playback."""
+    if is_dc_admin() or is_dc_leader():
+        return True
+    if is_dc_student():
+        student = dq.get_student_public(session["user_id"])
+        return bool(student) and dq.student_can_access_video(
+            student["studentid"], videoid
+        )
+    return False
 
 
 def current_user():
@@ -168,8 +187,7 @@ def can_access_course(courseid: int) -> bool:
     if "user_id" not in session:
         return False
     if session.get("user_type") == "teacher":
-        teacher = rq.get_teacher_public(session["user_id"])
-        return teacher is not None and teacher["courseid"] == courseid
+        return rq.get_teacher_public(session["user_id"]) is not None
     return rq.is_student_enrolled(session["user_id"], courseid)
 
 
@@ -183,13 +201,11 @@ def rail_courses():
         return []
     if session.get("user_type") == "student":
         return rq.get_courses_for_student(session["user_id"])
-    teacher = rq.get_teacher_public(session["user_id"])
-    if not teacher:
+    if not rq.get_teacher_public(session["user_id"]):
         return []
-    course = rq.get_course(teacher["courseid"])
-    if not course:
-        return []
-    return [{"courseid": course["courseid"], "title": course["title"]}]
+    return [
+        {"courseid": c["courseid"], "title": c["title"]} for c in rq.get_all_courses()
+    ]
 
 
 def student_progress(courseid: int, studentid: int) -> int:
@@ -201,6 +217,26 @@ def student_progress(courseid: int, studentid: int) -> int:
         return 0
     submitted = rq.count_submitted_tickets_for_class(classid)
     return int(submitted / total_days * 100)
+
+
+def day_form_fields() -> tuple[dict | None, str | None]:
+    """Lecture day fields from a Modules form as (fields, error message)."""
+    num = request.form.get("num", type=int)
+    title = request.form.get("title", "").strip()
+    slidelink = request.form.get("slidelink", "").strip()
+    if not num or not title:
+        return None, "Day number and title are required."
+    if slidelink and not slidelink.lower().startswith(("http://", "https://")):
+        return None, "Slide link must start with http:// or https://."
+    if len(slidelink) > 255:
+        return None, "Slide link must be 255 characters or fewer."
+    return {
+        "num": num,
+        "title": title[:255],
+        "description": request.form.get("description", "").strip()[:255],
+        "assignment": request.form.get("assignment", "").strip(),
+        "slidelink": slidelink,
+    }, None
 
 
 def course_context(courseid: int, active: str):
@@ -230,29 +266,33 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
+def google_calendar_invite_url(admin: dict, student: dict | None = None) -> str:
+    """Pre-filled Google Calendar event with the admin as a guest; the student picks the time and saves."""
+    title = f"AARI Help Desk: 1:1 with {admin['fname']} {admin['lname']}"
+    details = "1:1 help session booked from the AARI Help Desk."
+    if student:
+        title += f" ({student['fname']} {student['lname']})"
+        details += f"\nStudent: {student['fname']} {student['lname']} <{student['email']}>"
+    params = {
+        "action": "TEMPLATE",
+        "text": title,
+        "details": details,
+        "add": admin["email"],
+    }
+    return "https://calendar.google.com/calendar/render?" + urlencode(params, quote_via=quote)
+
+
 def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
-def allowed_file(filename: str) -> bool:
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-def save_attachment(file_storage) -> str | None:
-    if not file_storage or not file_storage.filename:
-        return None
-    if not allowed_file(file_storage.filename):
-        return None
-    filename = secure_filename(file_storage.filename)
-    dest = UPLOAD_DIR / filename
-    base, ext = os.path.splitext(filename)
-    counter = 1
-    while dest.exists():
-        filename = f"{base}_{counter}{ext}"
-        dest = UPLOAD_DIR / filename
-        counter += 1
-    file_storage.save(dest)
-    return f"exittickets/{filename}"
+def redirect_to_submission(object_key: str | None, fallback_url: str):
+    """Send the viewer to a presigned MinIO URL, or back with an error if the file is gone."""
+    url = student_submissions.submission_url(object_key)
+    if not url:
+        flash("That file isn't available right now.", "error")
+        return redirect(fallback_url)
+    return redirect(url)
 
 
 # ---------------------------------------------------------------------------
@@ -266,16 +306,6 @@ def dc_member_type_and_id() -> tuple[str, int]:
     if is_dc_leader():
         return "leader", session["user_id"]
     return "student", session["user_id"]
-
-
-def video_in_division(videoid: int, courseid: int, studentid: int | None = None) -> bool:
-    if studentid is not None:
-        return dq.student_can_access_video(studentid, videoid)
-    video = dq.get_video(videoid)
-    if not video:
-        return False
-    week = dq.get_week(video["weekid"])
-    return week is not None and week["courseid"] == courseid
 
 
 def dc_staff_cohortid() -> int | None:
@@ -322,11 +352,16 @@ def dc_admin_courseid() -> int:
 
 def resolve_next_video(studentid: int, courseid: int) -> dict | None:
     """Return the lesson the student should watch next (resume or first unwatched)."""
+    unlocked = dq.get_week_gate(studentid)["unlocked"]
+    videos = [
+        v for v in dq.get_videos_for_student(studentid) if v["weekid"] in unlocked
+    ]
+    unlocked_videoids = {v["videoid"] for v in videos}
+
     resume = dq.get_resume_point(studentid)
-    if resume and not resume.get("watched"):
+    if resume and not resume.get("watched") and resume["videoid"] in unlocked_videoids:
         return resume
 
-    videos = dq.get_videos_for_student(studentid)
     if not videos:
         return None
 
@@ -353,6 +388,47 @@ def resolve_next_video(studentid: int, courseid: int) -> dict | None:
         "last_position": 0,
     }
 
+@app.route("/api/speak", methods=["POST"])
+def api_speak():
+    data = request.get_json()
+    text = data.get("text", "").strip()
+    if text == "":
+        return jsonify({"error": "No text"}), 400
+
+    key = os.environ.get("Eleven_Labs_Key", "").strip()
+    voice_id = os.environ.get("Voice_Id", "").strip()
+    if key == "" or voice_id == "":
+        return jsonify({"error": "Missing Eleven_Labs_Key or Voice_Id"}), 500
+
+    try:
+        resp = requests.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+            params={"output_format": "mp3_44100_128"},
+            headers={
+                "xi-api-key": key,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg",
+            },
+            json={"text": text, "model_id": "eleven_multilingual_v2"},
+            timeout=60,
+        )
+    except requests.RequestException as exc:
+        return jsonify({"error": f"Could not reach ElevenLabs: {exc.__class__.__name__}"}), 500
+
+    if resp.status_code != 200:
+        detail = ""
+        try:
+            body = resp.json().get("detail")
+            detail = body.get("message", "") if isinstance(body, dict) else str(body or "")
+        except ValueError:
+            pass
+        message = f"ElevenLabs speech failed ({resp.status_code})"
+        return jsonify({"error": f"{message}: {detail}" if detail else message}), 500
+
+    if not resp.content or not resp.headers.get("Content-Type", "").startswith("audio/"):
+        return jsonify({"error": "ElevenLabs returned no audio"}), 500
+
+    return Response(resp.content, mimetype="audio/mpeg")
 
 def build_week_path(lesson_rail: list[dict], next_videoid: int | None) -> list[dict]:
     """Summarize week completion for the dashboard learning path."""
@@ -368,6 +444,7 @@ def build_week_path(lesson_rail: list[dict], next_videoid: int | None) -> list[d
                 "week": group["week"],
                 "all_watched": all_watched,
                 "is_current": is_current,
+                "locked": group.get("locked", False),
             }
         )
     return path
@@ -382,6 +459,7 @@ def build_lesson_rail(
 ) -> list[dict]:
     weeks = dq.get_weeks_for_student(studentid)
     videos = dq.get_videos_for_student(studentid)
+    unlocked = dq.get_week_gate(studentid)["unlocked"]
     progress_rows = dq.get_progress_for_student(studentid)
     watched = {p["videoid"]: p["watched"] for p in progress_rows}
     assignments: dict[int, dict] = {}
@@ -398,7 +476,19 @@ def build_lesson_rail(
         if include_assignments:
             entry["assignment"] = assignments.get(video["videoid"])
         by_week.setdefault(video["weekid"], []).append(entry)
-    return [{"week": week, "videos": by_week.get(week["weekid"], [])} for week in weeks]
+    rail = []
+    previous = None
+    for week in weeks:
+        rail.append(
+            {
+                "week": week,
+                "videos": by_week.get(week["weekid"], []),
+                "locked": week["weekid"] not in unlocked,
+                "previous_week": previous,
+            }
+        )
+        previous = week
+    return rail
 
 
 def build_lesson_rail_for_course(
@@ -434,7 +524,7 @@ def build_lesson_rail_for_course(
 
 def dc_student_context(active: str, student: dict, **extra) -> dict:
     course = dq.get_course(student["courseid"])
-    cohort = dq.get_cohort(student["cohortid"])
+    cohort = dq.get_cohort(student["cohortid"]) if student.get("cohortid") else None
     completion = dq.get_course_completion(student["studentid"])
     ctx = {
         "course": course,
@@ -446,6 +536,7 @@ def dc_student_context(active: str, student: dict, **extra) -> dict:
         "monogram": course_monogram,
         "all_courses": dq.get_all_courses(),
         "orchestration_branch": student.get("orchestration_branch"),
+        "student_is_college": bool(student.get("college")),
     }
     ctx.update(extra)
     return ctx
@@ -558,6 +649,7 @@ def inject_globals():
         "user_is_dc_admin": is_dc_admin(),
         "user_is_dc_leader": is_dc_leader(),
         "user_is_dc_cohort_staff": is_dc_cohort_staff(),
+        "submission_accept": student_submissions.ACCEPT_ATTR,
     }
 
 
@@ -568,6 +660,11 @@ def format_datetime(value):
     if isinstance(value, datetime):
         return value.strftime("%b %d, %Y · %I:%M %p")
     return str(value)
+
+
+@app.template_filter("attachment_name")
+def attachment_name(object_key: str | None) -> str:
+    return student_submissions.display_name(object_key)
 
 
 @app.template_filter("branch_label")
@@ -590,75 +687,388 @@ def landing():
     return render_template("landing.html")
 
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
+def suite_for_path(url: str | None) -> str | None:
+    """Which program a URL belongs to ("dc" or "robotics"), or None for shared pages."""
+    if not url:
+        return None
+    path = urlparse(url).path
+    if path == "/dc" or path.startswith("/dc/") or path.startswith("/api/"):
+        return "dc"
+    if path.startswith(("/course/", "/teacher/", "/student/")):
+        return "robotics"
+    return None
+
+
+# (suite, user_type, lookup, id column, default landing endpoint), tried in order per login page
+LOGIN_ACCOUNTS = {
+    "robotics": [
+        ("robotics", "student", rq.get_student_by_email, "studentid", "student_home"),
+        ("robotics", "teacher", rq.get_teacher_by_email, "teacherid", "teacher_home"),
+    ],
+    "dc": [
+        ("dc", "student", dq.get_student_by_email, "studentid", "dc_home"),
+        ("dc", "leader", dq.get_leader_by_email, "leaderid", "dc_home"),
+        ("dc", "admin", dq.get_admin_by_email, "adminid", "dc_home"),
+    ],
+}
+
+
+def _password_unset(account: dict) -> bool:
+    """True when the account has no password yet (first-login setup)."""
+    pw = account.get("password")
+    return pw is None or pw == ""
+
+
+def _set_account_password(suite: str, user_type: str, user_id: int, pw_hash: str) -> bool:
+    """Persist a new password on first login (bootcamp or high school)."""
+    if suite == "dc":
+        if user_type == "admin":
+            return bool(dq.set_admin_password(user_id, pw_hash))
+        if user_type == "student":
+            return dq.set_student_password(user_id, pw_hash)
+        if user_type == "leader":
+            return dq.set_leader_password(user_id, pw_hash)
+    elif suite == "robotics":
+        if user_type == "student":
+            return rq.reset_student_password(user_id, pw_hash)
+        if user_type == "teacher":
+            return rq.set_teacher_password(user_id, pw_hash)
+    return False
+
+
+def _finish_login(
+    suite: str,
+    user_type: str,
+    user_id: int,
+    email: str,
+    landing: str,
+    next_url: str | None,
+):
+    session.clear()
+    session["suite"] = suite
+    session["user_id"] = user_id
+    session["user_type"] = user_type
+    session["email"] = email
+    if next_url and suite_for_path(next_url) in (None, suite):
+        return redirect(next_url)
+    return redirect(url_for(landing))
+
+
+def handle_login(program: str):
+    """Shared login form; each program's page only checks that program's accounts."""
+    next_url = request.args.get("next")
+
+    def render_login(**extra):
+        return render_template("login.html", program=program, **extra)
+
     if request.method == "POST":
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "")
-        if not email or not password:
+        confirm = request.form.get("confirm_password", "")
+        first_time = request.form.get("first_time") == "on"
+
+        if not email:
+            flash("Email is required.", "error")
+            return render_login(first_time=first_time)
+
+        if first_time:
+            if len(password) < 8:
+                flash("Use a password of at least 8 characters.", "error")
+                return render_login(email=email, first_time=True)
+            if password != confirm:
+                flash("Passwords did not match.", "error")
+                return render_login(email=email, first_time=True)
+
+            for suite, user_type, lookup, id_col, landing in LOGIN_ACCOUNTS[program]:
+                account = lookup(email)
+                if not account:
+                    continue
+                if not _password_unset(account):
+                    flash(
+                        "This account already has a password. "
+                        "Uncheck “first time” and sign in normally.",
+                        "error",
+                    )
+                    return render_login(email=email, first_time=False)
+                pw_hash = hash_password(password)
+                if not _set_account_password(suite, user_type, account[id_col], pw_hash):
+                    flash("Could not save your password. Contact an administrator.", "error")
+                    return render_login(email=email, first_time=True)
+                flash("Password saved. You're signed in.", "success")
+                return _finish_login(
+                    suite, user_type, account[id_col], account["email"], landing, next_url
+                )
+
+            flash("No invited account found for that email.", "error")
+            return render_login(email=email, first_time=True)
+
+        if not password:
             flash("Email and password are required.", "error")
-            return render_template("login.html")
+            return render_login(email=email)
 
-        student = rq.get_student_by_email(email)
-        if student and verify_password(password, student["password"]):
-            session.clear()
-            session["suite"] = "robotics"
-            session["user_id"] = student["studentid"]
-            session["user_type"] = "student"
-            session["email"] = student["email"]
-            dest = request.args.get("next") or url_for("student_home")
-            return redirect(dest)
-
-        teacher = rq.get_teacher_by_email(email)
-        if teacher and verify_password(password, teacher["password"]):
-            session.clear()
-            session["suite"] = "robotics"
-            session["user_id"] = teacher["teacherid"]
-            session["user_type"] = "teacher"
-            session["email"] = teacher["email"]
-            session["teacher_courseid"] = teacher["courseid"]
-            dest = request.args.get("next") or url_for(
-                "course_home", courseid=teacher["courseid"]
-            )
-            return redirect(dest)
-
-        dc_student = dq.get_student_by_email(email)
-        if dc_student and verify_password(password, dc_student["password"]):
-            session.clear()
-            session["suite"] = "dc"
-            session["user_id"] = dc_student["studentid"]
-            session["user_type"] = "student"
-            session["email"] = dc_student["email"]
-            dest = request.args.get("next") or url_for("dc_home")
-            return redirect(dest)
-
-        dc_leader = dq.get_leader_by_email(email)
-        if dc_leader and verify_password(password, dc_leader["password"]):
-            session.clear()
-            session["suite"] = "dc"
-            session["user_id"] = dc_leader["leaderid"]
-            session["user_type"] = "leader"
-            session["email"] = dc_leader["email"]
-            dest = request.args.get("next") or url_for("dc_home")
-            return redirect(dest)
-
-        dc_admin = dq.get_admin_by_email(email)
-        if dc_admin and verify_password(password, dc_admin["password"]):
-            session.clear()
-            session["suite"] = "dc"
-            session["user_id"] = dc_admin["adminid"]
-            session["user_type"] = "admin"
-            session["email"] = dc_admin["email"]
-            dest = request.args.get("next") or url_for("dc_home")
-            return redirect(dest)
+        for suite, user_type, lookup, id_col, landing in LOGIN_ACCOUNTS[program]:
+            account = lookup(email)
+            if not account:
+                continue
+            if _password_unset(account):
+                flash(
+                    "Check “First time logging in” to choose a password, "
+                    "or sign in with Microsoft.",
+                    "error",
+                )
+                return render_login(email=email, first_time=True)
+            if verify_password(password, account["password"]):
+                return _finish_login(
+                    suite, user_type, account[id_col], account["email"], landing, next_url
+                )
 
         flash("Invalid email or password.", "error")
+        return render_login(email=email)
 
-    return render_template("login.html")
+    return render_login()
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    return handle_login("robotics")
+
+
+@app.route("/dc/login", methods=["GET", "POST"])
+def dc_login():
+    return handle_login("dc")
+
+
+# ---------------------------------------------------------------------------
+# Microsoft Entra ID (high school + bootcamp)
+# ---------------------------------------------------------------------------
+
+_MS_RESERVED_SCOPES = frozenset({"openid", "profile", "offline_access"})
+_MS_PROGRAM_ROLES = {
+    "robotics": frozenset({"student", "teacher"}),
+    "dc": frozenset({"student", "leader", "admin"}),
+}
+
+
+def _env_first(*names: str) -> str:
+    """Return the first non-empty environment value among the given names."""
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _ms_authority(raw: str) -> str:
+    """
+    Normalize an Entra authority / authorize URL to what MSAL expects, e.g.
+    https://login.microsoftonline.com/common
+    """
+    raw = raw.strip().rstrip("/")
+    if not raw:
+        return ""
+    for marker in ("/oauth2/", "/v2.0"):
+        idx = raw.find(marker)
+        if idx != -1:
+            return raw[:idx].rstrip("/")
+    return raw
+
+
+def _ms_config() -> dict[str, str] | None:
+    """
+    Return Entra settings from the environment, or None if incomplete.
+
+    Primary names (from the Entra app registration):
+      Client_id, Value (client secret string), Redirect_url, auth_url
+    MS_* names are accepted as fallbacks.
+    Secret_id is the Azure secret identifier, not the secret itself — ignored.
+    """
+    client_id = _env_first("Client_id", "MS_CLIENT_ID")
+    # Azure portal labels the secret string "Value"; Secret_id is only an id.
+    client_secret = _env_first("Value", "MS_CLIENT_SECRET")
+    redirect_uri = _env_first("Redirect_url", "MS_REDIRECT_URI")
+    authority = _ms_authority(_env_first("auth_url", "MS_AUTHORITY"))
+    if not (client_id and client_secret and redirect_uri and authority):
+        return None
+    return {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "authority": authority,
+    }
+
+
+def _ms_scopes() -> list[str]:
+    # "authorization" may hold space-separated scopes; otherwise default.
+    raw = _env_first("authorization", "MS_SCOPES") or "User.Read email"
+    if raw.lower().startswith("http"):
+        # Full authorize URL was pasted into authorization — not scopes.
+        raw = "User.Read email"
+    return [s for s in raw.split() if s and s not in _MS_RESERVED_SCOPES]
+
+
+def _msal_app(config: dict[str, str]):
+    import msal
+
+    return msal.ConfidentialClientApplication(
+        config["client_id"],
+        authority=config["authority"],
+        client_credential=config["client_secret"],
+    )
+
+
+def _ms_login_endpoint(program: str) -> str:
+    return "dc_login" if program == "dc" else "login"
+
+
+def _ms_lookup_account(program: str, role: str, email: str):
+    """
+    Look up an allowlisted account for Microsoft sign-in.
+
+    Returns (account_row, id_column, landing_endpoint) or (None, None, None).
+    """
+    if program == "robotics":
+        if role == "student":
+            account = rq.get_student_by_email(email)
+            return (account, "studentid", "student_home") if account else (None, None, None)
+        if role == "teacher":
+            account = rq.get_teacher_by_email(email)
+            return (account, "teacherid", "teacher_home") if account else (None, None, None)
+    elif program == "dc":
+        if role == "student":
+            account = dq.get_student_by_email(email)
+            return (account, "studentid", "dc_home") if account else (None, None, None)
+        if role == "leader":
+            account = dq.get_leader_by_email(email)
+            return (account, "leaderid", "dc_home") if account else (None, None, None)
+        if role == "admin":
+            account = dq.get_admin_by_email(email)
+            return (account, "adminid", "dc_home") if account else (None, None, None)
+    return None, None, None
+
+
+@app.route("/auth/microsoft/login")
+def microsoft_login():
+    """Start the Entra authorization-code flow for a high school or bootcamp role."""
+    program = (request.args.get("program") or "robotics").strip()
+    role = (request.args.get("role") or "").strip()
+    allowed = _MS_PROGRAM_ROLES.get(program)
+    if not allowed or role not in allowed:
+        abort(400)
+
+    login_endpoint = _ms_login_endpoint(program)
+    config = _ms_config()
+    if not config:
+        missing = [
+            label
+            for label, ok in (
+                ("Client_id", _env_first("Client_id", "MS_CLIENT_ID")),
+                ("Value", _env_first("Value", "MS_CLIENT_SECRET")),
+                ("Redirect_url", _env_first("Redirect_url", "MS_REDIRECT_URI")),
+                ("auth_url", _env_first("auth_url", "MS_AUTHORITY")),
+            )
+            if not ok
+        ]
+        flash(
+            "Microsoft sign-in is not configured. "
+            f"Add these to .env and restart Flask: {', '.join(missing) or 'Client_id, Value, Redirect_url, auth_url'}.",
+            "error",
+        )
+        return redirect(url_for(login_endpoint))
+
+    flow = _msal_app(config).initiate_auth_code_flow(
+        _ms_scopes(),
+        redirect_uri=config["redirect_uri"],
+    )
+    session["ms_auth_flow"] = flow
+    session["ms_auth_role"] = role
+    session["ms_auth_program"] = program
+    return redirect(flow["auth_uri"])
+
+
+@app.route("/auth/callback")
+def microsoft_callback():
+    """Finish the Entra flow, allowlist by program/role, then mirror a password login session."""
+    role = session.pop("ms_auth_role", None)
+    program = session.pop("ms_auth_program", None) or "robotics"
+    flow = session.pop("ms_auth_flow", None)
+    login_endpoint = _ms_login_endpoint(program)
+
+    def fail(message: str = "Microsoft sign-in failed. Please try again."):
+        flash(message, "error")
+        return redirect(url_for(login_endpoint))
+
+    allowed = _MS_PROGRAM_ROLES.get(program, frozenset())
+    if role not in allowed or not flow:
+        return fail(
+            "Microsoft sign-in session expired. Click Sign in with Microsoft again."
+        )
+
+    config = _ms_config()
+    if not config:
+        return fail("Microsoft sign-in is not configured.")
+
+    try:
+        result = _msal_app(config).acquire_token_by_auth_code_flow(flow, dict(request.args))
+    except ValueError as exc:
+        print(f"Microsoft auth code flow error: {exc.__class__.__name__}")
+        return fail("Microsoft sign-in could not be completed. Please try again.")
+
+    if "error" in result:
+        # Log description for local debugging; never flash tokens or raw secrets.
+        print(
+            "Microsoft token error:",
+            result.get("error"),
+            result.get("error_description", "")[:200],
+        )
+        return fail("Microsoft sign-in was rejected. Please try again.")
+
+    claims = result.get("id_token_claims") or {}
+    tid = claims.get("tid")
+    # Personal Microsoft accounts always have tid; oid can fall back to sub.
+    oid = claims.get("oid") or claims.get("sub")
+    if not tid or not oid:
+        print("Microsoft claims missing tid/oid; keys:", sorted(claims.keys()))
+        return fail("Microsoft sign-in did not return a usable account id.")
+
+    email = (claims.get("email") or claims.get("preferred_username") or "").strip().lower()
+    if not email:
+        print("Microsoft claims missing email; keys:", sorted(claims.keys()))
+        return fail("Microsoft sign-in did not return an email address.")
+
+    # Entra only proves identity. Access requires that email already exist in the
+    # matching program DB for the role they clicked. Passwords are not checked.
+    account, id_col, landing = _ms_lookup_account(program, role, email)
+    if not account:
+        session.clear()
+        flash(
+            f"No {role} account exists for {email}. "
+            "Ask an instructor to add that email first.",
+            "error",
+        )
+        return redirect(url_for(login_endpoint))
+
+    # user_id must stay the DB primary key — the rest of the app looks up rows by it.
+    # Microsoft's stable id is stored separately as ms_user_id (tid:oid).
+    suite = "dc" if program == "dc" else "robotics"
+    # Entra counts as a completed first login (no password required).
+    if suite == "dc" and role == "admin":
+        dq.mark_admin_signed_in(account[id_col])
+    session.clear()
+    session["suite"] = suite
+    session["user_id"] = account[id_col]
+    session["user_type"] = role
+    session["role"] = role
+    session["email"] = account["email"]
+    session["auth_provider"] = "microsoft"
+    session["ms_user_id"] = f"{tid}:{oid}"
+    return redirect(url_for(landing))
 
 
 @app.route("/logout")
 def logout():
+    # Clear the app session only. Do not send users through Microsoft's
+    # account-picker / "you signed out" pages — those rarely redirect back
+    # unless a front-channel logout URI is registered in Entra.
     session.clear()
     flash("You have been logged out.", "success")
     return redirect(url_for("landing"))
@@ -668,7 +1078,7 @@ def logout():
 def datacenter_entry():
     if session.get("suite") == "dc" and "user_id" in session:
         return redirect(url_for("dc_home"))
-    return redirect(url_for("login", next=url_for("dc_home")))
+    return redirect(url_for("dc_login"))
 
 
 @app.route("/account", methods=["GET", "POST"])
@@ -709,14 +1119,60 @@ def account():
 @login_required
 def student_home():
     if session.get("user_type") != "student":
-        teacher = rq.get_teacher_public(session["user_id"])
-        if teacher:
-            return redirect(url_for("course_home", courseid=teacher["courseid"]))
+        if is_instructor():
+            return redirect(url_for("teacher_home"))
         abort(403)
     courses = rq.get_courses_for_student(session["user_id"])
     if not courses:
         return render_template("student_no_courses.html", courses=[])
     return redirect(url_for("course_home", courseid=courses[0]["courseid"]))
+
+
+@app.route("/teacher/courses", methods=["GET", "POST"])
+@login_required
+def teacher_home():
+    """Teacher dashboard: every high school course, plus a form to create one."""
+    if session.get("suite") == "dc" or not is_instructor():
+        abort(403)
+    teacher = rq.get_teacher_public(session["user_id"])
+    if not teacher:
+        abort(403)
+
+    if request.method == "POST" and request.form.get("action") == "create_teacher":
+        fname = request.form.get("fname", "").strip()
+        lname = request.form.get("lname", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        if not (fname and lname and email):
+            flash("First name, last name, and email are required.", "error")
+        elif rq.create_teacher(fname, lname, email, None):
+            flash(
+                f"Invited {fname} {lname}. They can sign in with Microsoft, "
+                "or set a password on first login.",
+                "success",
+            )
+        else:
+            flash("Could not add teacher: that email is already in use.", "error")
+        return redirect(url_for("teacher_home"))
+
+    if request.method == "POST":
+        title = request.form.get("title", "").strip()[:255]
+        syllabus = request.form.get("syllabus", "").strip()
+        if not title:
+            flash("Course title is required.", "error")
+            return redirect(url_for("teacher_home"))
+        course = rq.create_course(title, syllabus)
+        if not course:
+            flash("Could not create course.", "error")
+            return redirect(url_for("teacher_home"))
+        flash(f"Created {course['title']}. Add weeks and days under Modules.", "success")
+        return redirect(url_for("course_modules", courseid=course["courseid"]))
+
+    return render_template(
+        "teacher_home.html",
+        teacher=teacher,
+        courses=rq.get_course_summaries(),
+        teachers=rq.get_all_teachers(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -739,10 +1195,14 @@ def course_syllabus(courseid):
     if request.method == "POST":
         if not ctx["is_instructor"]:
             abort(403)
+        title = request.form.get("title", "").strip()[:255]
         syllabus = request.form.get("syllabus", "").strip()
-        if syllabus:
+        if not title:
+            flash("Course title is required.", "error")
+        else:
+            rq.update_course_title(courseid, title)
             rq.update_syllabus(courseid, syllabus)
-            flash("Syllabus updated.", "success")
+            flash("Course details updated.", "success")
         return redirect(url_for("course_syllabus", courseid=courseid))
     ctx["syllabus_data"] = rq.get_syllabus(courseid)
     return render_template("course/syllabus.html", **ctx)
@@ -778,6 +1238,27 @@ def course_modules(courseid):
                         flash("Week deleted.", "success")
                     else:
                         flash("Could not delete week.", "error")
+        elif action in ("create_day", "update_day"):
+            fields, error = day_form_fields()
+            if error:
+                flash(error, "error")
+            elif action == "create_day":
+                week = rq.get_week(request.form.get("weekid", type=int) or 0)
+                if week and week["courseid"] == courseid:
+                    rq.create_day(week["weekid"], **fields)
+                    flash("Day added.", "success")
+            else:
+                day = rq.get_day(request.form.get("dayid", type=int) or 0)
+                if day and day["courseid"] == courseid:
+                    rq.update_day(day["dayid"], **fields)
+                    flash("Day updated.", "success")
+        elif action == "delete_day":
+            day = rq.get_day(request.form.get("dayid", type=int) or 0)
+            if day and day["courseid"] == courseid:
+                if rq.delete_day(day["dayid"]):
+                    flash("Day deleted.", "success")
+                else:
+                    flash("Could not delete day.", "error")
         return redirect(url_for("course_modules", courseid=courseid))
 
     classid = None
@@ -829,7 +1310,14 @@ def course_day(courseid, dayid):
 
         if session.get("user_type") != "student" or not classid:
             abort(403)
-        miniokey = save_attachment(request.files.get("attachment"))
+        try:
+            miniokey = student_submissions.store_submission(
+                request.files.get("attachment"),
+                f"exittickets/course-{courseid}/day-{dayid}/student-{session['user_id']}",
+            )
+        except SubmissionError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("course_day", courseid=courseid, dayid=dayid))
         if ticket:
             if not rq.verify_ticket_belongs_to_class(ticket["ticketid"], classid):
                 abort(403)
@@ -848,13 +1336,26 @@ def course_day(courseid, dayid):
         return redirect(url_for("course_day", courseid=courseid, dayid=dayid))
 
     ctx.update({"day": day, "classid": classid, "ticket": ticket})
+    if ctx["is_instructor"]:
+        ctx["day_rows"] = rq.get_ticket_submission_status_for_day(courseid, dayid)
     return render_template("course/day.html", **ctx)
+
+
+@app.route("/course/<int:courseid>/tickets")
+@login_required
+def course_tickets(courseid):
+    ctx = course_context(courseid, "tickets")
+    if not ctx["is_instructor"]:
+        abort(403)
+    ctx["weeks"] = rq.get_ticket_overview_for_course(courseid)
+    ctx["roster_size"] = len(rq.get_students_in_course(courseid))
+    return render_template("course/tickets_overview.html", **ctx)
 
 
 @app.route("/course/<int:courseid>/week/<int:weekid>/tickets")
 @login_required
 def course_week_tickets(courseid, weekid):
-    ctx = course_context(courseid, "modules")
+    ctx = course_context(courseid, "tickets")
     if not ctx["is_instructor"]:
         abort(403)
     week = rq.get_week(weekid)
@@ -864,6 +1365,30 @@ def course_week_tickets(courseid, weekid):
     ctx["tickets"] = rq.get_tickets_for_week(weekid)
     ctx["day_status"] = rq.get_ticket_submission_status_for_week(courseid, weekid)
     return render_template("course/tickets.html", **ctx)
+
+
+@app.route("/course/<int:courseid>/ticket/<int:ticketid>/attachment")
+@login_required
+def course_ticket_attachment(courseid, ticketid):
+    """Open an exit ticket attachment: the course's instructor or the student who submitted it."""
+    if session.get("suite") == "dc" or not can_access_course(courseid):
+        abort(403)
+    ticket = rq.get_exit_ticket(ticketid)
+    if not ticket or not ticket.get("miniokey"):
+        abort(404)
+    day = rq.get_day(ticket["dayid"])
+    if not day or day["courseid"] != courseid:
+        abort(404)
+    is_owner = (
+        session.get("user_type") == "student"
+        and ticket["studentid"] == session["user_id"]
+    )
+    if not is_owner and not is_instructor_for(courseid):
+        abort(403)
+    return redirect_to_submission(
+        ticket["miniokey"],
+        url_for("course_day", courseid=courseid, dayid=ticket["dayid"]),
+    )
 
 
 @app.route("/course/<int:courseid>/announcements", methods=["GET", "POST"])
@@ -894,7 +1419,7 @@ def course_announcements(courseid):
 @login_required
 def course_instructor(courseid):
     ctx = course_context(courseid, "instructor")
-    ctx["instructor"] = rq.get_teacher_for_course(courseid)
+    ctx["instructors"] = rq.get_all_teachers()
     return render_template("course/instructor.html", **ctx)
 
 
@@ -919,29 +1444,23 @@ def course_roster(courseid):
             if studentid:
                 rq.unenroll_student(studentid, courseid)
                 flash("Student unenrolled.", "success")
-        elif action == "reset_password":
-            studentid = request.form.get("studentid", type=int)
-            new_password = request.form.get("new_password", "")
-            if studentid and new_password:
-                new_hash = hash_password(new_password)
-                if rq.reset_student_password(studentid, new_hash):
-                    flash("Password reset.", "success")
-                else:
-                    flash("Could not reset password.", "error")
         elif action == "create":
             fname = request.form.get("fname", "").strip()
             lname = request.form.get("lname", "").strip()
             email = request.form.get("email", "").strip()
-            password = request.form.get("password", "")
-            if fname and lname and email and password:
-                result = rq.create_student(
-                    fname, lname, email, hash_password(password)
-                )
+            if fname and lname and email:
+                result = rq.create_student(fname, lname, email, None)
                 if result:
                     rq.enroll_student(result["studentid"], courseid)
-                    flash("Student created and enrolled.", "success")
+                    flash(
+                        "Student invited and enrolled. They can sign in with Microsoft, "
+                        "or set a password on first login.",
+                        "success",
+                    )
                 else:
                     flash("Could not create student (duplicate email?).", "error")
+            else:
+                flash("First name, last name, and email are required.", "error")
         elif action == "delete":
             studentid = request.form.get("studentid", type=int)
             if studentid:
@@ -1072,6 +1591,7 @@ def dc_home():
         ),
         profile=student,
         needs_branch_choice=needs_branch,
+        week_gate=dq.get_week_gate(student["studentid"]),
     )
     return render_template("dc/home.html", **ctx)
 
@@ -1079,19 +1599,18 @@ def dc_home():
 @app.route("/dc/content")
 @dc_login_required
 def dc_content():
-    """Jump to the student's next lesson (or first lesson in the track)."""
-    if is_dc_admin():
+    """Open the next lesson, or a module overview when the track has no lessons yet."""
+    if is_dc_admin() or is_dc_leader():
         courseid = dc_admin_courseid()
         videos = dq.get_videos_for_course(courseid)
         if videos:
             return redirect(url_for("dc_video", videoid=videos[0]["videoid"]))
-        return redirect(url_for("dc_admin_weeks", courseid=courseid))
-    if is_dc_leader():
-        courseid = dc_admin_courseid()
-        videos = dq.get_videos_for_course(courseid)
-        if videos:
-            return redirect(url_for("dc_video", videoid=videos[0]["videoid"]))
-        return redirect(url_for("dc_about"))
+        ctx = dc_page_context(
+            "content",
+            courseid=courseid,
+            lesson_rail=build_lesson_rail_for_course(courseid),
+        )
+        return render_template("dc/content.html", **ctx)
     if not is_dc_student():
         abort(403)
     student = dq.get_student_public(session["user_id"])
@@ -1100,7 +1619,12 @@ def dc_content():
     next_video = resolve_next_video(student["studentid"], student["courseid"])
     if next_video:
         return redirect(url_for("dc_video", videoid=next_video["videoid"]))
-    return redirect(url_for("dc_about"))
+    ctx = dc_student_context(
+        "content",
+        student,
+        lesson_rail=build_lesson_rail(student["studentid"], student["courseid"]),
+    )
+    return render_template("dc/content.html", **ctx)
 
 
 @app.route("/dc/about")
@@ -1122,8 +1646,15 @@ def dc_video(videoid):
 
     if is_dc_student():
         student = dq.get_student_public(session["user_id"])
-        if not student or not video_in_division(videoid, student["courseid"], student["studentid"]):
+        if not student or not dq.video_in_student_path(student["studentid"], videoid):
             abort(403)
+        if week["weekid"] not in dq.get_week_gate(student["studentid"])["unlocked"]:
+            flash(
+                f"Week {week['num']} is locked. Get every assignment in the week "
+                "before it marked satisfactory to unlock it.",
+                "error",
+            )
+            return redirect(url_for("dc_content"))
         dq.get_or_create_progress(student["studentid"], videoid)
 
         if request.method == "POST":
@@ -1132,17 +1663,35 @@ def dc_video(videoid):
                 dq.mark_video_watched(student["studentid"], videoid)
                 flash("Lesson marked complete.", "success")
             elif action == "submit_assignment":
-                miniokey = request.form.get("miniokey", "").strip()
-                if not miniokey:
-                    flash("Submission key is required.", "error")
-                elif dq.get_student_assignment_for_video(student["studentid"], videoid):
+                existing = dq.get_student_assignment_for_video(student["studentid"], videoid)
+                if existing and existing["status"] != "unsatisfactory":
                     flash("You already submitted for this lesson.", "error")
                 else:
-                    result = dq.submit_assignment(videoid, student["studentid"], miniokey)
-                    if result:
-                        flash("Assignment submitted.", "success")
+                    try:
+                        miniokey = student_submissions.store_submission(
+                            request.files.get("submission"),
+                            f"assignments/video-{videoid}/student-{student['studentid']}",
+                        )
+                    except SubmissionError as exc:
+                        miniokey = None
+                        flash(str(exc), "error")
                     else:
-                        flash("Could not submit assignment.", "error")
+                        if not miniokey:
+                            flash("Choose a file to submit.", "error")
+                        elif existing:
+                            if dq.resubmit_assignment(
+                                existing["assignmentid"], student["studentid"], miniokey
+                            ):
+                                student_submissions.delete_submission(existing["miniokey"])
+                                flash("Resubmitted — your new file is awaiting review.", "success")
+                            else:
+                                student_submissions.delete_submission(miniokey)
+                                flash("Could not resubmit assignment.", "error")
+                        elif dq.submit_assignment(videoid, student["studentid"], miniokey):
+                            flash("Assignment submitted.", "success")
+                        else:
+                            student_submissions.delete_submission(miniokey)
+                            flash("Could not submit assignment.", "error")
             return redirect(url_for("dc_video", videoid=videoid))
 
         progress = dq.get_or_create_progress(student["studentid"], videoid)
@@ -1154,7 +1703,7 @@ def dc_video(videoid):
             week=week,
             progress=progress,
             assignment=assignment,
-            stream_url=dc_video_stream_url(videoid),
+            stream_url=None if video.get("pdfkey") else dc_video_stream_url(videoid),
             lesson_rail=build_lesson_rail(
                 student["studentid"], student["courseid"], videoid
             ),
@@ -1171,7 +1720,7 @@ def dc_video(videoid):
             week=week,
             progress=None,
             assignment=None,
-            stream_url=dc_video_stream_url(videoid),
+            stream_url=None if video.get("pdfkey") else dc_video_stream_url(videoid),
             lesson_rail=build_lesson_rail_for_course(
                 week["courseid"], videoid, include_grading=True, cohortid=cohortid
             ),
@@ -1190,12 +1739,36 @@ def dc_video(videoid):
         week=week,
         progress=None,
         assignment=None,
-        stream_url=dc_video_stream_url(videoid),
+        stream_url=None if video.get("pdfkey") else dc_video_stream_url(videoid),
         lesson_rail=build_lesson_rail_for_course(
             week["courseid"], videoid, include_grading=True, cohortid=None
         ),
     )
     return render_template("dc/video.html", **ctx)
+
+
+@app.route("/dc/assignment/<int:assignmentid>/file")
+@dc_login_required
+def dc_assignment_file(assignmentid):
+    """Open a submitted assignment file: its student, or staff allowed to grade it."""
+    assignment = dq.get_assignment(assignmentid)
+    if not assignment:
+        abort(404)
+    if is_dc_student():
+        if assignment["studentid"] != session["user_id"]:
+            abort(403)
+    elif is_dc_cohort_staff():
+        _, cohortid = dc_admin_with_cohort()
+        if cohortid is not None and not dq.student_in_cohort(
+            assignment["studentid"], cohortid
+        ):
+            abort(403)
+    else:
+        abort(403)
+    return redirect_to_submission(
+        assignment["miniokey"],
+        url_for("dc_video", videoid=assignment["videoid"]),
+    )
 
 
 @app.route("/dc/assignments")
@@ -1321,11 +1894,14 @@ def dc_progress():
     student = dq.get_student_public(session["user_id"])
     if not student:
         abort(403)
+    resume = dq.get_resume_point(student["studentid"])
+    if resume and not dq.student_can_access_video(student["studentid"], resume["videoid"]):
+        resume = None
     ctx = dc_student_context(
         "progress",
         student,
         completion=dq.get_course_completion(student["studentid"]),
-        resume=dq.get_resume_point(student["studentid"]),
+        resume=resume,
     )
     return render_template("dc/progress.html", **ctx)
 
@@ -1356,7 +1932,8 @@ def dc_roster():
 
     cohortid = user.get("cohortid")
     if not cohortid:
-        abort(403)
+        ctx = dc_page_context("roster", roster=[], no_cohort_student=True)
+        return render_template("dc/roster.html", **ctx)
     ctx = dc_page_context("roster", roster=dq.get_cohort_roster(cohortid))
     return render_template("dc/roster.html", **ctx)
 
@@ -1481,6 +2058,127 @@ def dc_calls():
     return render_template("dc/calls.html", **ctx)
 
 
+@app.route("/dc/helpdesk")
+@dc_login_required
+def dc_helpdesk():
+    """List Help Desk contacts: admins (student) or student threads (admin)."""
+    if is_dc_leader():
+        abort(403)
+    if is_dc_admin():
+        ctx = dc_page_context(
+            "helpdesk",
+            students=dq.list_helpdesk_students_for_admin(session["user_id"]),
+        )
+        return render_template("dc/helpdesk.html", **ctx)
+    if not is_dc_student():
+        abort(403)
+    student = dq.get_student_public(session["user_id"])
+    admins = dq.list_helpdesk_admins()
+    for a in admins:
+        a["booking_url"] = google_calendar_invite_url(a, student)
+    ctx = dc_page_context("helpdesk", admins=admins)
+    return render_template("dc/helpdesk.html", **ctx)
+
+
+@app.route("/dc/helpdesk/<int:peer_id>", methods=["GET", "POST"])
+@dc_login_required
+def dc_helpdesk_thread(peer_id):
+    """Fetch or send on the 1:1 Help Desk thread with this admin (student) or student (admin)."""
+    if is_dc_leader():
+        abort(403)
+
+    if is_dc_student():
+        studentid = session["user_id"]
+        admin = dq.get_admin_public(peer_id)
+        if not admin:
+            abort(404)
+        if request.method == "POST":
+            content = request.form.get("content", "").strip()
+            if content:
+                dq.post_help_message(studentid, peer_id, "student", content)
+                flash("Message sent.", "success")
+            return redirect(url_for("dc_helpdesk_thread", peer_id=peer_id))
+        ctx = dc_page_context(
+            "helpdesk",
+            messages=dq.get_help_thread(studentid, peer_id),
+            peer_name=f"{admin['fname']} {admin['lname']}",
+            booking_url=google_calendar_invite_url(
+                admin, dq.get_student_public(studentid)
+            ),
+            member_type="student",
+        )
+        return render_template("dc/helpdesk_thread.html", **ctx)
+
+    if is_dc_admin():
+        student = dq.get_student_public(peer_id)
+        if not student:
+            abort(404)
+        if request.method == "POST":
+            content = request.form.get("content", "").strip()
+            if content:
+                dq.post_help_message(peer_id, session["user_id"], "admin", content)
+                flash("Message sent.", "success")
+            return redirect(url_for("dc_helpdesk_thread", peer_id=peer_id))
+        ctx = dc_page_context(
+            "helpdesk",
+            messages=dq.get_help_thread(peer_id, session["user_id"]),
+            peer_name=f"{student['fname']} {student['lname']}",
+            booking_url=None,
+            member_type="admin",
+        )
+        return render_template("dc/helpdesk_thread.html", **ctx)
+
+    abort(403)
+
+
+def _help_message_json(row: dict) -> dict:
+    return {
+        "id": row["help_messageid"],
+        "studentid": row["studentid"],
+        "adminid": row["adminid"],
+        "sender_type": row["sender_type"],
+        "sender_name": row.get("sender_name"),
+        "content": row["content"],
+        "sendtime": row["sendtime"].isoformat() if row.get("sendtime") else None,
+    }
+
+
+@app.route("/api/helpdesk/admins")
+@dc_login_required
+def api_helpdesk_admins():
+    if not is_dc_student():
+        abort(403)
+    student = dq.get_student_public(session["user_id"])
+    return jsonify([
+        {
+            "adminid": a["adminid"],
+            "name": f"{a['fname']} {a['lname']}",
+            "bookingUrl": google_calendar_invite_url(a, student),
+        }
+        for a in dq.list_helpdesk_admins()
+    ])
+
+
+@app.route("/api/helpdesk/<int:adminid>/messages", methods=["GET", "POST"])
+@dc_login_required
+def api_helpdesk_messages(adminid):
+    if not is_dc_student():
+        abort(403)
+    if not dq.get_admin_public(adminid):
+        abort(404)
+    studentid = session["user_id"]
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        content = (data.get("content") or "").strip()
+        if not content:
+            return jsonify({"error": "Message text is required."}), 400
+        row = dq.post_help_message(studentid, adminid, "student", content)
+        if not row:
+            return jsonify({"error": "Could not send message."}), 400
+        return jsonify(_help_message_json(row)), 201
+    return jsonify([_help_message_json(m) for m in dq.get_help_thread(studentid, adminid)])
+
+
 @app.route("/dc/account", methods=["GET", "POST"])
 @dc_login_required
 def dc_account():
@@ -1572,9 +2270,11 @@ def dc_admin_weeks():
             reflection = request.form.get("reflection", "").strip()
             upload = request.files.get("video_file")
             has_upload = upload and upload.filename
-            if not miniokey and has_upload:
+            pdf_upload = request.files.get("pdf_file")
+            has_pdf = pdf_upload and pdf_upload.filename
+            if not miniokey and (has_upload or has_pdf):
                 miniokey = "pending/processing"
-            if weekid and day and title and miniokey and script and instructions and reflection:
+            if weekid and day and title:
                 video = dq.create_video(
                     weekid, day, title, miniokey, script, instructions, reflection
                 )
@@ -1586,6 +2286,12 @@ def dc_admin_weeks():
                         flash(f"Video created but upload failed: {exc}", "error")
                 elif video:
                     flash("Video created.", "success")
+                if video and has_pdf:
+                    try:
+                        lesson_documents.store_lesson_pdf(video["videoid"], pdf_upload)
+                        flash("Lesson PDF uploaded.", "success")
+                    except DocumentError as exc:
+                        flash(f"Video created but PDF upload failed: {exc}", "error")
         elif action == "update_video":
             videoid = request.form.get("videoid", type=int)
             day = request.form.get("day", type=int)
@@ -1593,7 +2299,7 @@ def dc_admin_weeks():
             miniokey = request.form.get("miniokey", "").strip()
             instructions = request.form.get("instructions", "").strip()
             reflection = request.form.get("reflection", "").strip()
-            if videoid and day and title and miniokey and instructions and reflection:
+            if videoid and day and title:
                 video = dq.get_video(videoid)
                 if video:
                     dq.update_video(
@@ -1636,6 +2342,55 @@ def dc_admin_video_upload(videoid):
         return jsonify({"error": str(exc)}), 400
 
 
+@app.route("/dc/admin/video/<int:videoid>/upload/start", methods=["POST"])
+@dc_admin_required
+def dc_admin_video_upload_start(videoid):
+    """Open a chunked upload session for a large source video (admin only)."""
+    data = request.get_json(silent=True) or {}
+    try:
+        result = video_streaming.start_chunked_upload(
+            videoid, str(data.get("filename") or ""), int(data.get("size") or 0)
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result), 201
+
+
+@app.route("/dc/admin/video/<int:videoid>/upload/<upload_id>/chunk", methods=["POST"])
+@dc_admin_required
+def dc_admin_video_upload_chunk(videoid, upload_id):
+    """Append one raw chunk of the source video at ?offset= (admin only)."""
+    offset = request.args.get("offset", type=int)
+    if offset is None or offset < 0:
+        return jsonify({"error": "offset is required"}), 400
+    try:
+        result = video_streaming.append_upload_chunk(
+            videoid, upload_id, offset, request.stream, request.content_length
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result)
+
+
+@app.route("/dc/admin/video/<int:videoid>/upload/<upload_id>/finish", methods=["POST"])
+@dc_admin_required
+def dc_admin_video_upload_finish(videoid, upload_id):
+    """Close a chunked upload and enqueue the transcode (admin only)."""
+    try:
+        result = video_streaming.finish_chunked_upload(videoid, upload_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result), 202
+
+
+@app.route("/dc/admin/video/<int:videoid>/upload/<upload_id>/abort", methods=["POST"])
+@dc_admin_required
+def dc_admin_video_upload_abort(videoid, upload_id):
+    """Discard a partially uploaded video (admin only)."""
+    video_streaming.abort_chunked_upload(videoid, upload_id)
+    return jsonify({"aborted": True})
+
+
 @app.route("/dc/admin/video/<int:videoid>/transcode-status")
 @dc_admin_required
 def dc_admin_video_transcode_status(videoid):
@@ -1652,6 +2407,134 @@ def dc_admin_video_cancel_transcode(videoid):
     if not dq.get_video(videoid):
         abort(404)
     return jsonify(video_streaming.cancel_video_transcode(videoid))
+
+
+@app.route("/dc/admin/video/<int:videoid>/upload-pdf", methods=["POST"])
+@dc_admin_required
+def dc_admin_video_upload_pdf(videoid):
+    """Accept a source PDF and store it in MinIO alongside lesson video (admin only)."""
+    upload = request.files.get("pdf")
+    try:
+        result = lesson_documents.store_lesson_pdf(videoid, upload)
+        return jsonify(result), 201
+    except DocumentError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/dc/admin/video/<int:videoid>/pdf-status")
+@dc_admin_required
+def dc_admin_video_pdf_status(videoid):
+    """Report whether a lesson currently has a stored PDF (admin UI polling)."""
+    video = dq.get_video(videoid)
+    if not video:
+        abort(404)
+    pdfkey = video.get("pdfkey")
+    return jsonify(
+        {
+            "status": "stored" if pdfkey else "idle",
+            "videoid": videoid,
+            "pdfkey": pdfkey,
+        }
+    )
+
+
+@app.route("/dc/admin/video/<int:videoid>/remove-pdf", methods=["POST"])
+@dc_admin_required
+def dc_admin_video_remove_pdf(videoid):
+    """Detach a lesson PDF so the video player takes over again (admin only)."""
+    try:
+        return jsonify(lesson_documents.delete_lesson_pdf(videoid))
+    except DocumentError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/dc/admin/video/<int:videoid>/upload-instructions-pdf", methods=["POST"])
+@dc_admin_required
+def dc_admin_video_upload_instructions(videoid):
+    """Store the assignment instructions PDF shown at the end of a lesson (admin only)."""
+    try:
+        result = lesson_documents.store_instructions_pdf(videoid, request.files.get("pdf"))
+        return jsonify(result), 201
+    except DocumentError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/dc/admin/video/<int:videoid>/instructions-pdf-status")
+@dc_admin_required
+def dc_admin_video_instructions_status(videoid):
+    video = dq.get_video(videoid)
+    if not video:
+        abort(404)
+    key = video.get("instructionskey")
+    return jsonify({"status": "stored" if key else "idle", "videoid": videoid, "pdfkey": key})
+
+
+@app.route("/dc/admin/video/<int:videoid>/remove-instructions-pdf", methods=["POST"])
+@dc_admin_required
+def dc_admin_video_remove_instructions(videoid):
+    try:
+        return jsonify(lesson_documents.delete_instructions_pdf(videoid))
+    except DocumentError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/dc/video/<int:videoid>/instructions.pdf")
+@dc_login_required
+def dc_video_instructions_pdf(videoid):
+    """Serve a lesson's assignment instructions PDF inline, under lesson access rules."""
+    video = dq.get_video(videoid)
+    if not video or not video.get("instructionskey"):
+        abort(404)
+    if not dc_can_read_document(videoid):
+        abort(403)
+    try:
+        obj = miniIO.open_object(video["instructionskey"])
+    except Exception:
+        abort(404)
+
+    def close_object():
+        obj.close()
+        obj.release_conn()
+
+    filename = f"lesson-{videoid}-assignment-instructions.pdf"
+    response = Response(obj.stream(64 * 1024), mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
+    response.headers["Cache-Control"] = "private, no-store"
+    if obj.headers.get("Content-Length"):
+        response.headers["Content-Length"] = obj.headers["Content-Length"]
+    response.call_on_close(close_object)
+    return response
+
+
+@app.route("/api/extract_pdf", methods=["POST"])
+@dc_login_required
+def api_extract_pdf():
+    """
+    Extract a stored lesson PDF into display HTML plus TTS-ready text.
+
+    Images are served from MinIO, never inlined; ``chunks`` is the image-free
+    text pre-split to sizes ElevenLabs can synthesize in one request.
+    """
+    data = request.get_json(silent=True) or {}
+    videoid = data.get("videoid")
+    try:
+        videoid = int(videoid)
+    except (TypeError, ValueError):
+        return jsonify({"error": "videoid is required"}), 400
+
+    if not dq.get_video(videoid):
+        abort(404)
+    if not dc_can_read_document(videoid):
+        abort(403)
+
+    try:
+        document = lesson_documents.get_document(
+            videoid, refresh=bool(data.get("refresh")) and is_dc_admin()
+        )
+    except DocumentError as exc:
+        return jsonify({"error": str(exc)}), 404
+
+    return jsonify(document)
 
 
 @app.route("/dc/video/<int:videoid>/stream")
@@ -1771,11 +2654,45 @@ def dc_admin_analytics():
     return render_template("dc/admin_analytics.html", **ctx)
 
 
+@app.route("/dc/admin/admins", methods=["GET", "POST"])
+@dc_platform_admin_required
+def dc_admin_admins():
+    """Invite platform admins by email (password left unset until first login)."""
+    admin = dq.get_admin_public(session["user_id"])
+    if not admin:
+        abort(403)
+
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "create_admin":
+            fname = request.form.get("fname", "").strip()
+            lname = request.form.get("lname", "").strip()
+            email = request.form.get("email", "").strip()
+            if not fname or not lname or not email:
+                flash("First name, last name, and email are required.", "error")
+            else:
+                created = dq.create_admin(fname, lname, email, password_hash=None)
+                if created:
+                    flash(
+                        f"Admin invited: {created['email']}. "
+                        "They can sign in with Microsoft, or with that email to choose a password.",
+                        "success",
+                    )
+                else:
+                    flash("Could not add admin (email already in use?).", "error")
+        return redirect(url_for("dc_admin_admins"))
+
+    ctx = dc_admin_context("admin_admins", admin, admins=dq.get_all_admins())
+    return render_template("dc/admin_admins.html", **ctx)
+
+
 @app.route("/dc/admin/students", methods=["GET", "POST"])
 @dc_cohort_staff_required
 def dc_admin_students():
     staff, cohortid = dc_admin_with_cohort()
-    if is_dc_admin() and cohortid is None:
+    # Platform admins can switch to the college students who have no cohort.
+    no_cohort = is_dc_admin() and request.args.get("cohortid") == "none"
+    if is_dc_admin() and cohortid is None and not no_cohort:
         cohortid = request.args.get("cohortid", type=int) or (
             dq.get_all_cohorts()[0]["cohortid"] if dq.get_all_cohorts() else None
         )
@@ -1786,43 +2703,39 @@ def dc_admin_students():
             fname = request.form.get("fname", "").strip()
             lname = request.form.get("lname", "").strip()
             email = request.form.get("email", "").strip()
-            password = request.form.get("password", "")
             courseid = request.form.get("courseid", type=int)
             bio = request.form.get("bio", "").strip() or None
             orch_branch = request.form.get("orchestration_branch", "").strip() or None
-            if fname and lname and email and password and courseid:
-                pw_hash = hash_password(password)
+            college = no_cohort or request.form.get("college") == "on"
+            if fname and lname and email and courseid:
                 result = dq.create_student(
                     fname,
                     lname,
                     email,
-                    pw_hash,
+                    None,
                     courseid,
-                    cohortid,
+                    None if no_cohort else cohortid,
                     bio,
                     orchestration_branch=orch_branch,
+                    college=college,
                 )
                 if result:
-                    flash("Student created.", "success")
+                    flash(
+                        ("College student invited." if college else "Student invited.")
+                        + " They can sign in with Microsoft, or with that email to choose a password.",
+                        "success",
+                    )
                 else:
                     flash("Could not create student (duplicate email?).", "error")
-        elif action == "reset_password":
-            studentid = request.form.get("studentid", type=int)
-            new_password = request.form.get("new_password", "")
-            if studentid and new_password:
-                if dq.reset_student_password(
-                    studentid, hash_password(new_password), cohortid=cohortid
-                ):
-                    flash("Password reset.", "success")
-                else:
-                    flash("Could not reset password.", "error")
+            else:
+                flash("First name, last name, email, and division are required.", "error")
         elif action == "delete_student":
             studentid = request.form.get("studentid", type=int)
             if studentid and dq.delete_student(studentid, cohortid=cohortid):
                 flash("Student removed.", "success")
             else:
                 flash("Could not remove student.", "error")
-        return redirect(url_for("dc_admin_students", cohortid=cohortid))
+        return redirect(url_for("dc_admin_students", cohortid="none" if no_cohort else cohortid))
 
     if is_dc_leader():
         ctx = dc_leader_context(
@@ -1834,8 +2747,9 @@ def dc_admin_students():
         ctx = dc_admin_context(
             "admin_students",
             staff,
-            cohortid=cohortid,
-            students=dq.get_all_students(cohortid=cohortid),
+            cohortid=None if no_cohort else cohortid,
+            no_cohort_view=no_cohort,
+            students=dq.get_all_students(cohortid=cohortid, without_cohort=no_cohort),
         )
     return render_template("dc/admin_students.html", **ctx)
 
@@ -1855,21 +2769,17 @@ def dc_admin_cohorts():
             leader_fname = request.form.get("leader_fname", "").strip()
             leader_lname = request.form.get("leader_lname", "").strip()
             leader_email = request.form.get("leader_email", "").strip()
-            leader_password = request.form.get("leader_password", "")
             leader_bio = request.form.get("leader_bio", "").strip() or None
             if not region or not name:
                 flash("Cohort name and region are required.", "error")
             else:
-                pw_hash = (
-                    hash_password(leader_password) if leader_password else None
-                )
                 result = dq.create_cohort_with_leader(
                     region,
                     name,
                     leader_fname or None,
                     leader_lname or None,
                     leader_email or None,
-                    pw_hash,
+                    None,
                     leader_bio,
                 )
                 if result:
@@ -1888,25 +2798,22 @@ def dc_admin_cohorts():
             leader_fname = request.form.get("leader_fname", "").strip()
             leader_lname = request.form.get("leader_lname", "").strip()
             leader_email = request.form.get("leader_email", "").strip()
-            leader_password = request.form.get("leader_password", "")
             leader_bio = request.form.get("leader_bio", "").strip() or None
-            if (
-                cohortid
-                and leader_fname
-                and leader_lname
-                and leader_email
-                and leader_password
-            ):
+            if cohortid and leader_fname and leader_lname and leader_email:
                 result = dq.create_leader(
                     leader_fname,
                     leader_lname,
                     leader_email,
-                    hash_password(leader_password),
+                    None,
                     cohortid,
                     leader_bio,
                 )
                 if result:
-                    flash("Cohort leader assigned.", "success")
+                    flash(
+                        "Cohort leader invited. They can sign in with Microsoft, "
+                        "or set a password on first login.",
+                        "success",
+                    )
                 else:
                     flash(
                         "Could not assign leader (duplicate email or cohort "
@@ -1914,7 +2821,7 @@ def dc_admin_cohorts():
                         "error",
                     )
             else:
-                flash("All leader fields are required.", "error")
+                flash("Leader first name, last name, and email are required.", "error")
         return redirect(url_for("dc_admin_cohorts"))
 
     ctx = dc_admin_context(
@@ -1926,4 +2833,4 @@ def dc_admin_cohorts():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=int(os.getenv("PORT", "5000")))
+    app.run(debug=True, port=int(os.getenv("PORT") or os.getenv("FLASK_PORT") or "3000"))

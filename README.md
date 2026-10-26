@@ -28,8 +28,8 @@ This project expects **MySQL on the host** at `localhost:3306` by default (`MYSQ
 Import course schemas after MySQL is up:
 
 ```bash
-mysql -u root -p < dccourse.sql
-mysql -u root -p < robotcourse.sql
+mysql -u root -p < bootcamp.sql
+mysql -u root -p < highschool.sql
 python3 make_test_login.py --suite dc --reset-all
 ```
 
@@ -39,7 +39,7 @@ Transcoding shells out to the system `ffmpeg` binary (not a pip package).
 
 - **macOS:** `brew install ffmpeg`
 - **Ubuntu/Debian:** `sudo apt-get install ffmpeg`
-- **Docker app image:** add `RUN apt-get update && apt-get install -y ffmpeg` to your Dockerfile
+- **Docker app image:** already included in the `Dockerfile`
 
 ## Python app
 
@@ -48,6 +48,84 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 flask --app app run --debug
+```
+
+## Deploying to Railway
+
+The `Dockerfile` builds only the Flask app. On start, `docker-entrypoint.sh`:
+1. runs `init_db.py`, which loads `bootcamp.sql` / `highschool.sql` only if those databases don't exist yet;
+2. starts the `dc-transcode` RQ worker in the background (it must share the container with the web process, because uploads are handed over through a local temp folder);
+3. serves the app with gunicorn on `$PORT`.
+
+MySQL, Redis and MinIO run as separate Railway services.
+
+### 1. Create the services
+
+In one Railway project, add:
+
+| Service | How |
+|---------|-----|
+| **MySQL** | New → Database → MySQL |
+| **Redis** | New → Database → Redis |
+| **MinIO** | New → Template → search "MinIO" (attach a volume), then generate a **public domain** for its API port (9000) |
+| **App** | New → GitHub repo (this repo). `railway.toml` tells Railway to build the `Dockerfile`. Generate a public domain for it. |
+
+MinIO needs a public domain because browsers load videos, PDFs, and submissions directly from presigned MinIO URLs.
+
+### 2. App service variables
+
+Use Railway reference variables so credentials stay in sync (service names must match yours):
+
+```bash
+MYSQL_HOST=${{MySQL.MYSQLHOST}}
+MYSQL_PORT=${{MySQL.MYSQLPORT}}
+MYSQL_USER=${{MySQL.MYSQLUSER}}
+MYSQL_PASSWORD=${{MySQL.MYSQLPASSWORD}}
+
+REDIS_URL=${{Redis.REDIS_URL}}
+
+MINIO_ENDPOINT=<minio-public-domain>.up.railway.app   # host only, no https://
+MINIO_SECURE=true
+MINIO_ACCESS_KEY=${{MinIO.MINIO_ROOT_USER}}
+MINIO_SECRET_KEY=${{MinIO.MINIO_ROOT_PASSWORD}}
+MINIO_BUCKET=aari-videos
+MINIO_CORS_ORIGINS=https://<app-public-domain>.up.railway.app
+
+FLASK_SECRET_KEY=<long random string>   # python -c "import secrets; print(secrets.token_hex(32))"
+BEHIND_PROXY=true
+TEST_PASSWORD=<strong password for the seeded demo accounts>
+
+# Optional
+Eleven_Labs_Key=...
+Voice_Id=...
+```
+
+`TEST_PASSWORD` is applied to every seeded account the first time the databases are created. Change it before the first deploy; it is not written to the logs.
+
+### 3. Deploy
+
+Push to the connected branch (or `railway up`). The first boot logs `MySQL: applied bootcamp.sql` and `MySQL: applied highschool.sql`; later boots log `already exists, leaving it alone`.
+
+To wipe everything and reload the seed data later, open a shell in the app service (`railway ssh`) and run `python reset_local.py --yes`. **This deletes all MinIO objects and both databases.**
+
+### Optional settings
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `AUTO_INIT_DB` | `true` | Load missing databases on start |
+| `RUN_WORKER` | `true` | Run the transcode worker in the app container |
+| `WEB_CONCURRENCY` | `2` | gunicorn worker processes |
+| `GUNICORN_TIMEOUT` | `600` | Seconds before a slow request (large upload) is killed |
+
+### Run the image locally
+
+```bash
+docker build -t aari-suite .
+docker run --rm -p 8000:8000 --env-file .env \
+  -e MYSQL_HOST=host.docker.internal \
+  -e REDIS_URL=redis://host.docker.internal:6379/0 \
+  -e MINIO_ENDPOINT=host.docker.internal:9000 \
+  aari-suite
 ```
 
 ## Video upload → transcode → playback (data center)
@@ -96,6 +174,10 @@ Flask only issues the URL; MinIO serves bytes and HTTP range requests. The front
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| POST | `/dc/admin/video/<videoid>/upload` | DC admin | Upload source file, enqueue transcode |
+| POST | `/dc/admin/video/<videoid>/upload` | DC admin | Upload source file in one request, enqueue transcode (small files only behind proxies) |
+| POST | `/dc/admin/video/<videoid>/upload/start` | DC admin | Open a chunked upload: JSON `{filename, size}` → `{upload_id, chunk_size}` |
+| POST | `/dc/admin/video/<videoid>/upload/<upload_id>/chunk?offset=N` | DC admin | Raw bytes of one chunk; re-sending a chunk overwrites from `offset` |
+| POST | `/dc/admin/video/<videoid>/upload/<upload_id>/finish` | DC admin | Verify the file is complete and enqueue transcode |
+| POST | `/dc/admin/video/<videoid>/upload/<upload_id>/abort` | DC admin | Discard a partial upload |
 | GET | `/dc/admin/video/<videoid>/transcode-status` | DC admin | Job status |
 | GET | `/dc/video/<videoid>/stream` | DC student/admin | Presigned playback URL |

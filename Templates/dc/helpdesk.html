@@ -1,0 +1,57 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Help Desk{% endblock %}
+
+{% block dc_content %}
+<section class="card">
+  <h2>{% if user_is_dc_admin %}Student messages{% else %}Message an admin{% endif %}</h2>
+  {% if user_is_dc_admin %}
+    <p class="card-meta">Students reach you here for 1:1 help. Meeting requests arrive as Google Calendar invites at your account email.</p>
+  {% else %}
+    <p class="card-meta">Write any platform admin, or book a 1:1: <strong>Book a Meeting</strong> opens your Google Calendar with the admin already invited — pick a time and save, and they get the invite by email.</p>
+  {% endif %}
+
+  {% if user_is_dc_admin %}
+    {% if students %}
+      <ul class="module-list">
+        {% for s in students %}
+          <li>
+            <div class="helpdesk-row">
+              <div>
+                <strong>{{ s.fname }} {{ s.lname }}</strong>
+                <p class="card-meta" style="margin: 0.25rem 0 0;">{{ s.email }} · last message {{ s.last_sendtime | format_datetime }}</p>
+              </div>
+              <div class="helpdesk-actions">
+                <a href="{{ url_for('dc_helpdesk_thread', peer_id=s.studentid) }}" class="btn btn-primary btn-sm">Message</a>
+              </div>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty-state">No Help Desk threads yet. They appear here when a student messages you.</p>
+    {% endif %}
+  {% else %}
+    {% if admins %}
+      <ul class="module-list">
+        {% for a in admins %}
+          <li>
+            <div class="helpdesk-row">
+              <div>
+                <strong>{{ a.fname }} {{ a.lname }}</strong>
+              </div>
+              <div class="helpdesk-actions">
+                <a href="{{ url_for('dc_helpdesk_thread', peer_id=a.adminid) }}" class="btn btn-primary btn-sm">Message</a>
+                <a href="{{ a.booking_url }}" class="btn btn-secondary btn-sm"
+                   target="_blank" rel="noopener noreferrer">Book a Meeting</a>
+              </div>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty-state">No admins are listed yet.</p>
+    {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,63 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Manage admins{% endblock %}
+
+{% block dc_content %}
+<p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+  Invite platform admins by email. They sign in with Microsoft, or with that email to choose their own password on first login.
+</p>
+
+<section class="teacher-panel">
+  <h3>Invite admin</h3>
+  <form method="post">
+    <input type="hidden" name="action" value="create_admin">
+    <div class="inline-form">
+      <div class="form-group">
+        <label for="admin-fname">First name</label>
+        <input type="text" id="admin-fname" name="fname" required maxlength="255">
+      </div>
+      <div class="form-group">
+        <label for="admin-lname">Last name</label>
+        <input type="text" id="admin-lname" name="lname" required maxlength="255">
+      </div>
+      <div class="form-group">
+        <label for="admin-email">Email</label>
+        <input type="email" id="admin-email" name="email" required maxlength="255">
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Add admin</button>
+  </form>
+</section>
+
+<h2>Platform admins</h2>
+{% if admins %}
+<div class="table-wrap card" style="padding:0; overflow:hidden;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in admins %}
+        <tr>
+          <td>{{ a.fname }} {{ a.lname }}</td>
+          <td><a href="mailto:{{ a.email }}">{{ a.email }}</a></td>
+          <td>
+            {% if a.signed_in_at or a.has_password %}
+              Active
+            {% else %}
+              <span class="badge">Pending first login</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+  <p class="empty-state">No admins yet.</p>
+{% endif %}
+{% endblock %}

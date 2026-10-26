@@ -1,5 +1,5 @@
 """
-AARI Educational Suite — Robotics program database queries (robcourse).
+AARI Educational Suite — Robotics program database queries (highschool).
 
 Serves these app pages/features:
   - Login (student / teacher auth)
@@ -9,8 +9,9 @@ Serves these app pages/features:
   - Per-course announcements (read / teacher create-delete)
   - Exit ticket submit & edit (student, ungraded, one per day)
   - Teacher retention view (day/week responses, submission status — no grades)
-  - Teacher admin (weeks CRUD, syllabus edit, roster enroll/unenroll, password reset)
-  - Instructor profile — PARTIALLY SUPPORTED: fname, lname, email, courseid only
+  - Teacher admin (course create/rename, weeks and days CRUD, syllabus edit,
+    roster enroll/unenroll, password reset) — teachers can manage every course
+  - Instructor list — PARTIALLY SUPPORTED: fname, lname, email only
 
 Database access: SQLAlchemy Core via db.py (raw SQL, no ORM).
 """
@@ -111,7 +112,7 @@ def get_student_by_email(email: str) -> dict[str, Any] | None:
         """
         SELECT studentid, fname, lname, email, password
         FROM students
-        WHERE email = :email
+        WHERE LOWER(email) = LOWER(:email)
         LIMIT 1
         """,
         {"email": email},
@@ -122,9 +123,9 @@ def get_teacher_by_email(email: str) -> dict[str, Any] | None:
     """Return full teacher row including password hash for auth verification."""
     return fetch_one(
         """
-        SELECT teacherid, fname, lname, email, password, courseid
+        SELECT teacherid, fname, lname, email, password
         FROM teacher
-        WHERE email = :email
+        WHERE LOWER(email) = LOWER(:email)
         LIMIT 1
         """,
         {"email": email},
@@ -145,10 +146,10 @@ def get_student_public(studentid: int) -> dict[str, Any] | None:
 
 
 def get_teacher_public(teacherid: int) -> dict[str, Any] | None:
-    """Return teacher profile without password (name, email, courseid only)."""
+    """Return teacher profile without password (name and email only)."""
     return fetch_one(
         """
-        SELECT teacherid, fname, lname, email, courseid
+        SELECT teacherid, fname, lname, email
         FROM teacher
         WHERE teacherid = :teacherid
         LIMIT 1
@@ -157,16 +158,60 @@ def get_teacher_public(teacherid: int) -> dict[str, Any] | None:
     )
 
 
-def get_teacher_for_course(courseid: int) -> dict[str, Any] | None:
-    """Return the instructor for a course (no password), or None."""
-    return fetch_one(
+def get_all_teachers() -> list[dict[str, Any]]:
+    """Return every instructor (no passwords). Teachers are not tied to a course."""
+    return fetch_all(
         """
-        SELECT teacherid, fname, lname, email, courseid
+        SELECT teacherid, fname, lname, email
         FROM teacher
-        WHERE courseid = :courseid
+        ORDER BY lname, fname
+        """
+    )
+
+
+def create_teacher(
+    fname: str,
+    lname: str,
+    email: str,
+    password_hash: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Create an instructor account. password_hash may be None for first-login setup.
+    Returns None if a teacher or student already uses the email.
+    """
+    in_use = fetch_one(
+        """
+        SELECT email FROM teacher WHERE email = :email
+        UNION ALL
+        SELECT email FROM students WHERE email = :email
         LIMIT 1
         """,
-        {"courseid": courseid},
+        {"email": email},
+    )
+    if in_use:
+        return None
+    teacherid = execute_insert(
+        """
+        INSERT INTO teacher (fname, lname, email, password)
+        VALUES (:fname, :lname, :email, :password)
+        """,
+        {"fname": fname, "lname": lname, "email": email, "password": password_hash},
+    )
+    return get_teacher_public(teacherid)
+
+
+def set_teacher_password(teacherid: int, password_hash: str) -> bool:
+    """Set a teacher's password hash (first-login setup)."""
+    return (
+        execute(
+            """
+            UPDATE teacher
+            SET password = :password
+            WHERE teacherid = :teacherid
+            """,
+            {"password": password_hash, "teacherid": teacherid},
+        )
+        > 0
     )
 
 
@@ -204,6 +249,42 @@ def get_all_courses() -> list[dict[str, Any]]:
         ORDER BY courseid
         """
     )
+
+
+def get_course_summaries() -> list[dict[str, Any]]:
+    """Every course with week, day, and enrollment counts for the teacher dashboard."""
+    return fetch_all(
+        """
+        SELECT c.courseid, c.title,
+               (SELECT COUNT(*) FROM `Week` w WHERE w.courseid = c.courseid) AS week_count,
+               (SELECT COUNT(*) FROM `Day` d JOIN `Week` w ON w.weekid = d.weekid
+                 WHERE w.courseid = c.courseid) AS day_count,
+               (SELECT COUNT(*) FROM `class` cl WHERE cl.courseid = c.courseid) AS student_count
+        FROM Course c
+        ORDER BY c.courseid
+        """
+    )
+
+
+def create_course(title: str, syllabus: str) -> dict[str, Any] | None:
+    """Insert a course. Return the new row."""
+    courseid = execute_insert(
+        """
+        INSERT INTO Course (title, syllabus)
+        VALUES (:title, :syllabus)
+        """,
+        {"title": title, "syllabus": syllabus},
+    )
+    return get_course(courseid)
+
+
+def update_course_title(courseid: int, title: str) -> dict[str, Any] | None:
+    """Rename a course. Return updated row, or None if not found."""
+    execute(
+        "UPDATE Course SET title = :title WHERE courseid = :courseid",
+        {"title": title, "courseid": courseid},
+    )
+    return get_course(courseid)
 
 
 def get_course(courseid: int) -> dict[str, Any] | None:
@@ -581,7 +662,7 @@ def get_ticket_submission_status_for_day(
         """
         SELECT s.studentid, s.fname, s.lname, s.email, cl.classid,
                CASE WHEN et.ticketid IS NOT NULL THEN 1 ELSE 0 END AS submitted,
-               et.ticketid
+               et.ticketid, et.miniokey
         FROM `class` cl
         JOIN students s ON s.studentid = cl.studentid
         LEFT JOIN exitTicket et
@@ -620,31 +701,51 @@ def get_ticket_submission_status_for_week(
 
     tickets = fetch_all(
         """
-        SELECT et.classid, et.dayid, et.ticketid
+        SELECT et.classid, et.dayid, et.ticketid, et.miniokey
         FROM exitTicket et
         JOIN `Day` d ON d.dayid = et.dayid
         WHERE d.weekid = :weekid
         """,
         {"weekid": weekid},
     )
-    by_day_class: dict[tuple[int, int], int] = {
-        (t["dayid"], t["classid"]): t["ticketid"] for t in tickets
+    by_day_class: dict[tuple[int, int], dict[str, Any]] = {
+        (t["dayid"], t["classid"]): t for t in tickets
     }
 
     result = []
     for day in days:
         rows = []
         for student in roster:
-            ticketid = by_day_class.get((day["dayid"], student["classid"]))
+            ticket = by_day_class.get((day["dayid"], student["classid"]))
             rows.append(
                 {
                     **student,
-                    "submitted": ticketid is not None,
-                    "ticketid": ticketid,
+                    "submitted": ticket is not None,
+                    "ticketid": ticket["ticketid"] if ticket else None,
+                    "miniokey": ticket["miniokey"] if ticket else None,
                 }
             )
-        result.append({"day": day, "rows": rows})
+        submitted = sum(1 for row in rows if row["submitted"])
+        result.append({"day": day, "rows": rows, "submitted": submitted})
     return result
+
+
+def get_ticket_overview_for_course(courseid: int) -> list[dict[str, Any]]:
+    """Per week: number of lecture days and exit tickets submitted by enrolled students."""
+    return fetch_all(
+        """
+        SELECT w.weekid, w.num, w.title,
+               COUNT(DISTINCT d.dayid) AS day_count,
+               COUNT(DISTINCT et.ticketid) AS submitted
+        FROM `Week` w
+        LEFT JOIN `Day` d ON d.weekid = w.weekid
+        LEFT JOIN exitTicket et ON et.dayid = d.dayid
+        WHERE w.courseid = :courseid
+        GROUP BY w.weekid, w.num, w.title
+        ORDER BY w.num
+        """,
+        {"courseid": courseid},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -691,6 +792,66 @@ def delete_week(weekid: int) -> bool:
     return execute("DELETE FROM `Week` WHERE weekid = :weekid", {"weekid": weekid}) > 0
 
 
+def create_day(
+    weekid: int,
+    num: int,
+    title: str,
+    description: str,
+    assignment: str | None,
+    slidelink: str | None,
+) -> dict[str, Any] | None:
+    """Insert a lecture day. Blank exit ticket text and slide links are stored as NULL."""
+    dayid = execute_insert(
+        """
+        INSERT INTO `Day` (weekid, num, title, description, assignment, slidelink)
+        VALUES (:weekid, :num, :title, :description, :assignment, :slidelink)
+        """,
+        {
+            "weekid": weekid,
+            "num": num,
+            "title": title,
+            "description": description,
+            "assignment": assignment or None,
+            "slidelink": slidelink or None,
+        },
+    )
+    return get_day(dayid)
+
+
+def update_day(
+    dayid: int,
+    num: int,
+    title: str,
+    description: str,
+    assignment: str | None,
+    slidelink: str | None,
+) -> dict[str, Any] | None:
+    """Update a lecture day. Return updated row, or None if not found."""
+    execute(
+        """
+        UPDATE `Day`
+        SET num = :num, title = :title, description = :description,
+            assignment = :assignment, slidelink = :slidelink
+        WHERE dayid = :dayid
+        """,
+        {
+            "dayid": dayid,
+            "num": num,
+            "title": title,
+            "description": description,
+            "assignment": assignment or None,
+            "slidelink": slidelink or None,
+        },
+    )
+    return get_day(dayid)
+
+
+def delete_day(dayid: int) -> bool:
+    """Delete a lecture day and its exit tickets. Return True if the day was removed."""
+    execute("DELETE FROM exitTicket WHERE dayid = :dayid", {"dayid": dayid})
+    return execute("DELETE FROM `Day` WHERE dayid = :dayid", {"dayid": dayid}) > 0
+
+
 def update_day_assignment(dayid: int, assignment: str) -> dict[str, Any] | None:
     """Update the exit-ticket description for a lecture day."""
     rows = execute(
@@ -725,9 +886,12 @@ def create_student(
     fname: str,
     lname: str,
     email: str,
-    password_hash: str,
+    password_hash: str | None = None,
 ) -> dict[str, Any] | None:
-    """Create a student account. Returns None if email is already taken."""
+    """
+    Create a student account. password_hash may be None for first-login setup.
+    Returns None if email is already taken.
+    """
     existing = fetch_one(
         "SELECT studentid FROM students WHERE email = :email LIMIT 1",
         {"email": email},

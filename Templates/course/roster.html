@@ -4,7 +4,10 @@
 
 {% block course_content %}
 <div class="teacher-panel">
-  <h3>Create student</h3>
+  <h3>Invite student</h3>
+  <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
+    Add by email only. They sign in with Microsoft, or set their own password on first login.
+  </p>
   <form method="post">
     <input type="hidden" name="action" value="create">
     <div class="inline-form">
@@ -20,12 +23,8 @@
         <label for="email">Email</label>
         <input type="email" id="email" name="email" required>
       </div>
-      <div class="form-group">
-        <label for="password">Initial password</label>
-        <input type="password" id="password" name="password" required minlength="6">
-      </div>
     </div>
-    <button type="submit" class="btn btn-primary">Create &amp; enroll</button>
+    <button type="submit" class="btn btn-primary">Invite &amp; enroll</button>
   </form>
 </div>
 
@@ -67,19 +66,6 @@
               <input type="hidden" name="action" value="delete">
               <input type="hidden" name="studentid" value="{{ s.studentid }}">
               <button type="submit" class="btn btn-danger btn-sm">Remove</button>
-            </form>
-          </td>
-        </tr>
-        <tr>
-          <td colspan="3" style="background: var(--bg-cream);">
-            <form method="post" class="inline-form">
-              <input type="hidden" name="action" value="reset_password">
-              <input type="hidden" name="studentid" value="{{ s.studentid }}">
-              <div class="form-group">
-                <label>New password</label>
-                <input type="password" name="new_password" required minlength="6" placeholder="Reset password">
-              </div>
-              <button type="submit" class="btn btn-secondary btn-sm">Reset password</button>
             </form>
           </td>
         </tr>

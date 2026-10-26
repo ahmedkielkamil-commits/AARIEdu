@@ -17,6 +17,15 @@ build/
 # Flask / app uploads
 static/uploads/
 
+# Lesson media belongs in MinIO, not the repo or image
+*.zip
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.m4v
+*.avi
+
 # OS & editor
 .DS_Store
 .idea/

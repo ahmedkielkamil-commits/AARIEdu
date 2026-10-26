@@ -1,0 +1,46 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}{{ peer_name }}{% endblock %}
+
+{% block dc_content %}
+<p style="margin-bottom: 1rem;">
+  <a href="{{ url_for('dc_helpdesk') }}" class="btn btn-secondary btn-sm">Back to Help Desk</a>
+  {% if booking_url %}
+    <a href="{{ booking_url }}" class="btn btn-secondary btn-sm"
+       target="_blank" rel="noopener noreferrer">Book a Meeting</a>
+  {% endif %}
+</p>
+
+<section class="card helpdesk-thread">
+  <div class="messenger-messages" id="messages">
+    {% for msg in messages %}
+      <article class="message {% if msg.sender_type == member_type %}message-own{% endif %}">
+        <div class="message-meta">
+          <strong>{{ msg.sender_name or 'Unknown' }}</strong>
+          <span>{{ msg.sendtime | format_datetime }}</span>
+        </div>
+        <p class="message-body">{{ msg.content }}</p>
+      </article>
+    {% else %}
+      <p class="empty-state">No messages yet. Say hello!</p>
+    {% endfor %}
+  </div>
+
+  <form method="post" class="messenger-compose helpdesk-compose">
+    <div class="form-group" style="margin-bottom: 0; flex: 1;">
+      <label for="content" class="sr-only">Message</label>
+      <textarea id="content" name="content" rows="2" required placeholder="Write a message…"></textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Send</button>
+  </form>
+</section>
+{% endblock %}
+
+{% block dc_scripts %}
+<script>
+  (function () {
+    var box = document.getElementById('messages');
+    if (box) box.scrollTop = box.scrollHeight;
+  })();
+</script>
+{% endblock %}

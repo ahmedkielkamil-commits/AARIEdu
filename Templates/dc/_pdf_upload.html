@@ -1,0 +1,28 @@
+{# Admin PDF upload + stored status (requires dc_admin_pdf_upload.js).
+   Set pdf_kind="instructions" for the assignment instructions PDF; defaults to the lesson PDF. #}
+{% if pdf_kind == "instructions" %}
+<div class="pdf-upload-panel"
+     data-videoid="{{ videoid }}"
+     data-upload-url="{{ url_for('dc_admin_video_upload_instructions', videoid=videoid) }}"
+     data-status-url="{{ url_for('dc_admin_video_instructions_status', videoid=videoid) }}"
+     data-remove-url="{{ url_for('dc_admin_video_remove_instructions', videoid=videoid) }}"
+     data-remove-prompt="Remove this lesson's assignment instructions PDF?">
+{% else %}
+<div class="pdf-upload-panel"
+     data-videoid="{{ videoid }}"
+     data-upload-url="{{ url_for('dc_admin_video_upload_pdf', videoid=videoid) }}"
+     data-status-url="{{ url_for('dc_admin_video_pdf_status', videoid=videoid) }}"
+     data-remove-url="{{ url_for('dc_admin_video_remove_pdf', videoid=videoid) }}"
+     data-remove-prompt="Remove this lesson PDF?">
+{% endif %}
+  <div class="video-upload-controls">
+    <label class="btn btn-secondary btn-sm video-upload-label">
+      Choose PDF file
+      <input type="file" class="pdf-file-input" accept="application/pdf,.pdf" hidden>
+    </label>
+    <button type="button" class="btn btn-primary btn-sm pdf-upload-btn" disabled>Upload PDF</button>
+    <button type="button" class="btn btn-danger btn-sm pdf-remove-btn" hidden>Remove PDF</button>
+  </div>
+  <p class="pdf-upload-filename card-meta"></p>
+  <p class="pdf-upload-status card-meta" aria-live="polite"></p>
+</div>

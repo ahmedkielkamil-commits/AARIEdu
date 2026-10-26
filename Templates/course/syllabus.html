@@ -5,19 +5,24 @@
 {% block course_content %}
 {% if is_instructor %}
 <div class="teacher-panel">
-  <h3>Edit syllabus</h3>
+  <h3>Edit course details</h3>
   <form method="post">
     <div class="form-group">
-      <textarea name="syllabus" rows="8" required>{{ syllabus_data.syllabus if syllabus_data else '' }}</textarea>
+      <label for="course-title">Course title</label>
+      <input type="text" id="course-title" name="title" required maxlength="255" value="{{ course.title }}">
     </div>
-    <button type="submit" class="btn btn-primary">Save syllabus</button>
+    <div class="form-group">
+      <label for="course-syllabus">Syllabus</label>
+      <textarea id="course-syllabus" name="syllabus" rows="8">{{ syllabus_data.syllabus if syllabus_data else '' }}</textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Save course details</button>
   </form>
 </div>
 {% endif %}
 
-{% if syllabus_data %}
+{% if syllabus_data and syllabus_data.syllabus %}
   <div class="syllabus-text">{{ syllabus_data.syllabus }}</div>
 {% else %}
-  <p class="empty-state">Syllabus not available.</p>
+  <p class="empty-state">No syllabus posted yet.</p>
 {% endif %}
 {% endblock %}

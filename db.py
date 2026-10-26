@@ -23,6 +23,9 @@ from sqlalchemy.engine import Connection, Engine
 
 _engines: dict[str, Engine] = {}
 
+# Not read from MYSQL_DATABASE: Railway's MySQL service sets that to "railway".
+HIGHSCHOOL_DATABASE = "highschool"
+
 
 _PLACEHOLDER_PASSWORDS = frozenset({"", "your_mysql_password", "password", "changeme"})
 
@@ -47,7 +50,7 @@ def build_database_url(database: str) -> str:
 
 
 def get_engine(database: str | None = None) -> Engine:
-    db = database or os.getenv("MYSQL_DATABASE", "robcourse")
+    db = database or HIGHSCHOOL_DATABASE
     if db not in _engines:
         _engines[db] = create_engine(
             build_database_url(db),

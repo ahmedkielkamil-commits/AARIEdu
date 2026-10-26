@@ -1,6 +1,6 @@
 {% extends "robotics_layout.html" %}
 
-{% block page_heading %}Week {{ week.num }} · Retention{% endblock %}
+{% block page_heading %}Week {{ week.num }} · Exit Tickets{% endblock %}
 
 {% block course_content %}
 <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
@@ -10,51 +10,17 @@
 
 {% if day_status %}
   {% for group in day_status %}
-    <h2>Day {{ group.day.num }} · {{ group.day.title }}</h2>
-    <div class="table-wrap card" style="padding:0; overflow:hidden; margin-bottom: 1.5rem;">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Student</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in group.rows %}
-            <tr>
-              <td>{{ row.fname }} {{ row.lname }}</td>
-              <td>
-                {% if row.submitted %}
-                  <span class="badge badge-success">Submitted</span>
-                {% else %}
-                  <span class="badge badge-warning">Not yet</span>
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% endfor %}
-{% endif %}
-
-<h2 style="margin-top: 2rem;">Submissions</h2>
-{% if tickets %}
-  {% for t in tickets %}
-    <article class="card">
-      <div class="card-meta">Day {{ t.day_num }} · {{ t.day_title }} — {{ t.fname }} {{ t.lname }}</div>
-      {% if t.miniokey %}
-        <p style="margin:0;">Attachment: {{ t.miniokey }}</p>
-      {% else %}
-        <p style="margin:0; color: var(--text-muted);">Marked complete (no attachment)</p>
-      {% endif %}
-    </article>
+    <h2>
+      <a href="{{ url_for('course_day', courseid=courseid, dayid=group.day.dayid) }}">Day {{ group.day.num }} · {{ group.day.title }}</a>
+      <span class="card-meta" style="font-size: 0.9rem; margin-left: 0.5rem;">{{ group.submitted }} / {{ group.rows | length }} submitted</span>
+    </h2>
+    {% include "course/_ticket_table.html" with context %}
   {% endfor %}
 {% else %}
-  <p class="empty-state">No exit tickets submitted for this week yet.</p>
+  <p class="empty-state">No lecture days published for this week yet.</p>
 {% endif %}
 
 <p style="margin-top: 1.5rem;">
-  <a href="{{ url_for('course_modules', courseid=courseid) }}">← Back to modules</a>
+  <a href="{{ url_for('course_tickets', courseid=courseid) }}">← All weeks</a>
 </p>
 {% endblock %}

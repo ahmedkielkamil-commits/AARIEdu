@@ -9,32 +9,48 @@
     <nav>
       {% if is_logged_in %}
         {% if session.get('suite') == 'dc' %}
-        <a href="{{ url_for('dc_home') }}">Data Center</a>
+        <a href="{{ url_for('dc_home') }}">Bootcamp</a>
         {% else %}
         <a href="{{ url_for('student_home') }}">My courses</a>
         {% endif %}
         ·
         <a href="{{ url_for('logout') }}">Log out</a>
       {% else %}
-        <a href="{{ url_for('login') }}">Log in</a>
+        <a href="{{ url_for('login') }}">High School log in</a>
+        ·
+        <a href="{{ url_for('dc_login') }}">Bootcamp log in</a>
       {% endif %}
     </nav>
   </header>
   <main class="public-main">
     <section class="hero">
       <h1>Atlanta Academic Robotics Initiative</h1>
-      <p>Hands-on STEM education for youth and career training for adult learners — two programs, one mission.</p>
+      <p>Data center education for two communities — a career bootcamp for non-traditional learners and a high school course for Boys &amp; Girls Club students. Two programs, one mission.</p>
     </section>
     <div class="entry-cards">
       <a href="{{ url_for('login', next=url_for('student_home')) }}" class="entry-card">
-        <h2>Robotics Courses</h2>
-        <p>16-week applied mathematics and coding fundamentals plus hands-on robot building for Boys &amp; Girls Club students. Weekly modules, announcements, and exit tickets.</p>
+        <h2>High School Course</h2>
+        <p>A 6-week in-person course for Boys &amp; Girls Club students — from what a data center is and a first line of Python to running an AI model on your own machine. Weekly modules, announcements, and exit tickets.</p>
       </a>
       <a href="{{ url_for('datacenter_entry') }}" class="entry-card">
-        <h2>Data Center Courses</h2>
-        <p>Asynchronous cohort training for data-center careers — video lessons, division tracks, graded labs, and cohort chat.</p>
+        <h2>Data Center Bootcamp</h2>
+        <p>Asynchronous career training for non-traditional students — video lessons, division tracks, graded labs, and cohort chat.</p>
       </a>
     </div>
+    <section class="home-gallery" aria-label="Program photos">
+      <figure class="home-gallery-item">
+        <img src="{{ url_for('static', filename='assets/home/microsoft-visit.jpg') }}"
+             alt="AARI students and staff gathered around the Microsoft sign during a site visit" loading="lazy">
+      </figure>
+      <figure class="home-gallery-item">
+        <img src="{{ url_for('static', filename='assets/home/aws-visit.jpg') }}"
+             alt="AARI students and staff in front of the AWS logo during a site visit" loading="lazy">
+      </figure>
+      <figure class="home-gallery-item home-gallery-tall">
+        <img src="{{ url_for('static', filename='assets/home/community-cloud-rack.jpg') }}"
+             alt="A student standing beside a server rack for the AARI community cloud" loading="lazy">
+      </figure>
+    </section>
   </main>
 </div>
 {% endblock %}

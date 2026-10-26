@@ -22,6 +22,9 @@
       </div>
     </div>
     <h4 style="margin: 1.25rem 0 0.75rem; font-size: 0.95rem;">Cohort leader (optional)</h4>
+    <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0 0 0.75rem;">
+      Invite by email only. They sign in with Microsoft, or set their own password on first login.
+    </p>
     <div class="inline-form">
       <div class="form-group">
         <label>First name</label>
@@ -34,10 +37,6 @@
       <div class="form-group">
         <label>Email</label>
         <input type="email" name="leader_email">
-      </div>
-      <div class="form-group">
-        <label>Initial password</label>
-        <input type="password" name="leader_password">
       </div>
     </div>
     <div class="form-group">
@@ -93,11 +92,7 @@
                   <label>Email</label>
                   <input type="email" name="leader_email" required>
                 </div>
-                <div class="form-group">
-                  <label>Password</label>
-                  <input type="password" name="leader_password" required>
-                </div>
-                <button type="submit" class="btn btn-primary btn-sm">Save leader</button>
+                <button type="submit" class="btn btn-primary btn-sm">Invite leader</button>
               </form>
             </details>
             {% else %}

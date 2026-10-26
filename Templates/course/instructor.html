@@ -1,18 +1,20 @@
 {% extends "robotics_layout.html" %}
 
-{% block page_heading %}Instructor{% endblock %}
+{% block page_heading %}Instructors{% endblock %}
 
 {% block course_content %}
-{% if instructor %}
-  <div class="instructor-card card">
-    <div class="instructor-avatar">{{ instructor.fname[0] }}{{ instructor.lname[0] }}</div>
-    <div>
-      <h2 style="margin-bottom:0.25rem;">{{ instructor.fname }} {{ instructor.lname }}</h2>
-      <p class="card-meta"><a href="mailto:{{ instructor.email }}">{{ instructor.email }}</a></p>
-      <p class="instructor-placeholder" style="margin-top:1rem;">Bio coming soon — instructor profiles are name-only for now.</p>
+{% if instructors %}
+  {% for instructor in instructors %}
+    <div class="instructor-card card">
+      <div class="instructor-avatar">{{ instructor.fname[0] }}{{ instructor.lname[0] }}</div>
+      <div>
+        <h2 style="margin-bottom:0.25rem;">{{ instructor.fname }} {{ instructor.lname }}</h2>
+        <p class="card-meta"><a href="mailto:{{ instructor.email }}">{{ instructor.email }}</a></p>
+      </div>
     </div>
-  </div>
+  {% endfor %}
+  <p class="instructor-placeholder" style="margin-top:1rem;">Bios coming soon — instructor profiles are name-only for now.</p>
 {% else %}
-  <p class="empty-state">No instructor assigned to this course yet.</p>
+  <p class="empty-state">No instructors yet.</p>
 {% endif %}
 {% endblock %}

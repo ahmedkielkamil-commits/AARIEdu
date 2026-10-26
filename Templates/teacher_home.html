@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block title %}Courses · AARI High School{% endblock %}
+
+{% block body %}
+<div class="public-page">
+  <header class="public-header">
+    <a href="{{ url_for('landing') }}" class="brand">AARI Educational Suite</a>
+    <nav>
+      <a href="{{ url_for('account') }}">Account</a>
+      ·
+      <a href="{{ url_for('logout') }}">Log out</a>
+    </nav>
+  </header>
+  <main class="public-main">
+    <h1>High school courses</h1>
+    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
+      Signed in as {{ teacher.fname }} {{ teacher.lname }}. Every instructor can open and manage any course.
+    </p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ 'error' if category == 'error' else 'success' }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    {% if courses %}
+      <div class="entry-cards">
+        {% for c in courses %}
+          <a href="{{ url_for('course_home', courseid=c.courseid) }}" class="entry-card">
+            <h2>{{ c.title }}</h2>
+            <p>
+              {{ c.week_count }} week{{ '' if c.week_count == 1 else 's' }} ·
+              {{ c.day_count }} day{{ '' if c.day_count == 1 else 's' }} ·
+              {{ c.student_count }} student{{ '' if c.student_count == 1 else 's' }}
+            </p>
+          </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">No courses yet. Create the first one below.</p>
+    {% endif %}
+
+    <div class="card" style="margin-top: 2rem;">
+      <h2>Create a course</h2>
+      <form method="post">
+        <div class="form-group">
+          <label for="title">Course title</label>
+          <input type="text" id="title" name="title" required maxlength="255" placeholder="e.g. From Infrastructure to Cloud">
+        </div>
+        <div class="form-group">
+          <label for="syllabus">Syllabus (optional)</label>
+          <textarea id="syllabus" name="syllabus" rows="5" placeholder="What students will learn, schedule, expectations…"></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">Create course</button>
+      </form>
+      <p class="card-meta" style="margin-top: 0.75rem;">
+        After creating it, add weeks and lecture days under Modules and enroll students from Roster.
+      </p>
+    </div>
+
+    <div class="card" style="margin-top: 2rem;">
+      <h2>Teachers</h2>
+      <p class="card-meta">Every teacher can open and manage every course.</p>
+      <ul style="margin: 0.75rem 0 1.25rem;">
+        {% for t in teachers %}
+          <li>{{ t.fname }} {{ t.lname }} · <a href="mailto:{{ t.email }}">{{ t.email }}</a></li>
+        {% endfor %}
+      </ul>
+      <h3>Invite a teacher</h3>
+      <p class="card-meta">Add by email only. They sign in with Microsoft, or set their own password on first login.</p>
+      <form method="post">
+        <input type="hidden" name="action" value="create_teacher">
+        <div class="inline-form">
+          <div class="form-group">
+            <label for="teacher-fname">First name</label>
+            <input type="text" id="teacher-fname" name="fname" required maxlength="255">
+          </div>
+          <div class="form-group">
+            <label for="teacher-lname">Last name</label>
+            <input type="text" id="teacher-lname" name="lname" required maxlength="255">
+          </div>
+          <div class="form-group">
+            <label for="teacher-email">Email</label>
+            <input type="email" id="teacher-email" name="email" required maxlength="255">
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Invite teacher</button>
+      </form>
+    </div>
+  </main>
+</div>
+{% endblock %}

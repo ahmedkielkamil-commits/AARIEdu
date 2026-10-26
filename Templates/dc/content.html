@@ -1,0 +1,48 @@
+{% extends "dc_layout.html" %}
+
+{% block page_heading %}Course Content{% endblock %}
+
+{% block dc_right_rail %}
+{% include "dc/_lesson_rail.html" %}
+{% endblock %}
+
+{% block dc_content %}
+<p style="color: var(--text-muted); margin-bottom: 1.25rem;">
+  Modules for {{ course.name }}. Lessons appear here after they are added to a week.
+</p>
+
+{% if user_is_dc_admin %}
+<p style="margin-bottom: 1.25rem;">
+  <a href="{{ url_for('dc_admin_weeks', courseid=courseid) }}" class="btn btn-primary btn-sm">Manage weeks &amp; lessons</a>
+</p>
+{% endif %}
+
+{% if lesson_rail %}
+  {% for group in lesson_rail %}
+    <section class="card {% if group.locked %}module-locked{% endif %}">
+      <h2>{% if group.locked %}<span class="lock-icon" aria-label="Locked">🔒</span> {% endif %}Week {{ group.week.num }} · {{ group.week.subject }}</h2>
+      <p class="card-meta">{{ group.week.description }}</p>
+      {% if group.locked and group.previous_week %}
+        <p class="lesson-lock-note">Locked until every Week {{ group.previous_week.num }} assignment is marked satisfactory.</p>
+      {% endif %}
+      {% if group.videos %}
+        <ul class="module-list">
+          {% for v in group.videos %}
+            <li>
+              {% if group.locked %}
+                <span class="module-item-locked">Day {{ v.day }} · {{ v.title }}</span>
+              {% else %}
+                <a href="{{ url_for('dc_video', videoid=v.videoid) }}">Day {{ v.day }} · {{ v.title }}</a>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty-state">No lessons in this week yet.</p>
+      {% endif %}
+    </section>
+  {% endfor %}
+{% else %}
+  <p class="empty-state">No weeks in this track yet.</p>
+{% endif %}
+{% endblock %}

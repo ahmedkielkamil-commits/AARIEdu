@@ -16,15 +16,19 @@
 </p>
 
 {% for group in lesson_rail %}
-  <section class="card">
-    <h2>Week {{ group.week.num }} · {{ group.week.subject }}</h2>
+  <section class="card {% if group.locked %}module-locked{% endif %}">
+    <h2>{% if group.locked %}<span class="lock-icon" aria-label="Locked">🔒</span> {% endif %}Week {{ group.week.num }} · {{ group.week.subject }}</h2>
     <ul class="grade-lesson-list">
       {% for v in group.videos %}
         <li class="grade-lesson-row">
           <span class="lesson-check {% if v.watched %}watched{% endif %}">
             {% if v.watched %}✓{% endif %}
           </span>
-          <a href="{{ url_for('dc_video', videoid=v.videoid) }}">{{ v.title }}</a>
+          {% if group.locked %}
+            <span class="module-item-locked">{{ v.title }}</span>
+          {% else %}
+            <a href="{{ url_for('dc_video', videoid=v.videoid) }}">{{ v.title }}</a>
+          {% endif %}
           <span class="grade-status">
             {% if admin_grades_view %}
               {% if v.ungraded_count %}

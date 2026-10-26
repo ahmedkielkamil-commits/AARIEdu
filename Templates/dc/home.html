@@ -39,9 +39,9 @@
     {% if week_path %}
     <ol class="dc-week-path" aria-label="Your course path">
       {% for step in week_path %}
-        <li class="dc-week-step {% if step.all_watched %}done{% elif step.is_current %}current{% endif %}"
-            title="Week {{ step.week.num }}: {{ step.week.subject }}">
-          <span class="dc-week-step-num" aria-hidden="true">{{ step.week.num }}</span>
+        <li class="dc-week-step {% if step.locked %}locked{% elif step.all_watched %}done{% elif step.is_current %}current{% endif %}"
+            title="Week {{ step.week.num }}: {{ step.week.subject }}{% if step.locked %} (locked){% endif %}">
+          <span class="dc-week-step-num" aria-hidden="true">{% if step.locked %}🔒{% else %}{{ step.week.num }}{% endif %}</span>
           <span class="dc-week-step-label">
             {{ step.week.subject }}
             {% if step.week.branch and step.week.branch != 'shared' %}
@@ -52,6 +52,13 @@
       {% endfor %}
     </ol>
     {% endif %}
+    {% set gate_week = week_gate.current %}
+    {% if gate_week and week_gate.next_locked %}
+      <p class="dc-week-gate-note">
+        🔒 Week {{ week_gate.next_locked.num }} unlocks when all {{ gate_week.lesson_count }} Week {{ gate_week.num }} assignments are marked satisfactory
+        ({{ gate_week.satisfactory_count }} of {{ gate_week.lesson_count }} so far).
+      </p>
+    {% endif %}
     <p><strong>{{ next_video.video_title }}</strong></p>
     <p class="card-meta">
       Week {{ next_video.week_num }} · Day {{ next_video.day_num }}
@@ -59,7 +66,11 @@
         · resume at {{ next_video.last_position }}s
       {% endif %}
     </p>
-    {% if next_video.watched %}
+    {% if next_video.watched and gate_week %}
+      <p class="card-meta">You've watched every lesson that's open. Submit or revise your Week {{ gate_week.num }} assignments to keep going.</p>
+      <a href="{{ url_for('dc_assignments') }}" class="btn btn-primary">Check your assignments</a>
+      <a href="{{ url_for('dc_video', videoid=next_video.videoid) }}" class="btn btn-secondary">Review lesson</a>
+    {% elif next_video.watched %}
       <p class="card-meta">You have finished every lesson — review or revisit anytime.</p>
       <a href="{{ url_for('dc_video', videoid=next_video.videoid) }}" class="btn btn-secondary">Review lesson</a>
     {% else %}

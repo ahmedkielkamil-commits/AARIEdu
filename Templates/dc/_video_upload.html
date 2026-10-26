@@ -2,6 +2,7 @@
 <div class="video-upload-panel"
      data-videoid="{{ videoid }}"
      data-upload-url="{{ url_for('dc_admin_video_upload', videoid=videoid) }}"
+     data-upload-start-url="{{ url_for('dc_admin_video_upload_start', videoid=videoid) }}"
      data-status-url="{{ url_for('dc_admin_video_transcode_status', videoid=videoid) }}"
      data-cancel-url="{{ url_for('dc_admin_video_cancel_transcode', videoid=videoid) }}">
   <div class="video-upload-controls">

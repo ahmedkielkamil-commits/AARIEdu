@@ -31,6 +31,11 @@
   box-sizing: border-box;
 }
 
+/* Component display rules (.btn, .doc-audio) otherwise beat the UA [hidden] rule. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   font-family: var(--font-sans);
@@ -144,6 +149,50 @@ p {
 .entry-card p {
   color: var(--text-muted);
   margin-bottom: 0;
+}
+
+/* 2fr/2fr/1fr with 3:2 landscape tiles gives the portrait tile a 3:4 shape at the same height */
+.home-gallery {
+  display: grid;
+  grid-template-columns: 2fr 2fr 1fr;
+  gap: 1rem;
+  margin-top: 2.5rem;
+}
+
+.home-gallery-item {
+  margin: 0;
+  overflow: hidden;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-card);
+  aspect-ratio: 3 / 2;
+}
+
+.home-gallery-tall {
+  aspect-ratio: 3 / 4;
+}
+
+.home-gallery-item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.home-gallery-tall img {
+  transform: scale(1.35);
+  transform-origin: 42% 45%;
+}
+
+@media (max-width: 640px) {
+  .home-gallery {
+    grid-template-columns: 1fr;
+  }
+
+  .home-gallery-tall {
+    width: 60%;
+    justify-self: center;
+  }
 }
 
 .auth-card {
@@ -619,6 +668,26 @@ p {
   padding-bottom: 0.5rem;
 }
 
+.module-day-edit {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+}
+
+.module-day-edit summary {
+  padding-bottom: 0;
+}
+
+.module-day-edit[open] summary {
+  padding-bottom: 0.5rem;
+}
+
+.day-edit-form textarea {
+  width: 100%;
+}
+
 .day-description {
   margin: 0 0 1rem;
   color: var(--text-secondary, var(--text-muted));
@@ -678,6 +747,14 @@ p {
 
 .instructor-reflection h2,
 .instructor-reflection h3 {
+  margin-top: 0;
+}
+
+.assignment-instructions {
+  margin: 1.25rem 0;
+}
+
+.assignment-instructions h2 {
   margin-top: 0;
 }
 
@@ -830,7 +907,6 @@ p {
   align-items: center;
   gap: 0.35rem;
 }
-
 .syllabus-text {
   white-space: pre-wrap;
   line-height: 1.65;
@@ -940,6 +1016,43 @@ p {
   border-color: var(--success-text);
 }
 
+.lesson-week-locked .lesson-week-label,
+.lesson-link-locked {
+  color: var(--text-muted);
+}
+
+.lesson-link-locked {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.4rem 0.35rem;
+  font-size: 0.88rem;
+  line-height: 1.35;
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.lesson-lock-note {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0 0 0.35rem;
+  line-height: 1.35;
+}
+
+.lock-icon {
+  font-size: 0.8em;
+  margin-right: 0.15rem;
+}
+
+.module-locked {
+  opacity: 0.75;
+}
+
+.module-item-locked {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
 .lesson-day-num {
   display: inline-block;
   font-size: 0.75rem;
@@ -990,6 +1103,132 @@ p {
 
 .video-unavailable p {
   margin: 0 0 0.5rem;
+}
+
+/* --- PDF document viewer (parallel to the lesson video player) --- */
+
+.doc-viewer {
+  margin-bottom: 1.25rem;
+}
+
+.doc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--rail-bg);
+}
+
+.doc-toolbar .doc-status {
+  margin: 0;
+}
+
+.doc-audio {
+  display: block;
+  width: 100%;
+  border-radius: 0;
+  background: var(--rail-bg);
+  border: 1px solid var(--border-soft);
+  border-top: 0;
+}
+
+.doc-body {
+  padding: 1.25rem;
+  border: 1px solid var(--border-soft);
+  border-top: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--bg-cream);
+  max-height: 70vh;
+  overflow: auto;
+}
+
+/* Full screen: native Fullscreen API, or a fixed overlay where it is unsupported */
+.doc-viewer.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  background: var(--bg-cream);
+}
+
+.doc-viewer.is-fullscreen::backdrop {
+  background: var(--bg-cream);
+}
+
+.doc-viewer.is-fullscreen .doc-toolbar {
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+}
+
+.doc-viewer.is-fullscreen .doc-audio {
+  border-left: 0;
+  border-right: 0;
+}
+
+.doc-viewer.is-fullscreen .doc-body {
+  flex: 1;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  padding: 1.5rem 2rem;
+}
+
+.doc-fullscreen-lock,
+.doc-fullscreen-lock body {
+  overflow: hidden;
+}
+
+.doc-body[aria-busy="true"]::before {
+  content: "Loading document…";
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+/* Each PDF page keeps PyMuPDF's absolute layout; the app supplies the rules
+   that normally live in the <head> of a standalone PyMuPDF export. */
+.pdf-page {
+  display: block;
+  margin: 0 auto 1.25rem;
+  overflow: hidden;
+}
+
+.pdf-page:last-child {
+  margin-bottom: 0;
+}
+
+.pdf-page-canvas {
+  position: relative;
+  background: #fff;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(61, 52, 41, 0.12);
+  transform-origin: top left;
+  overflow: hidden;
+}
+
+.pdf-draw {
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.pdf-page-canvas p {
+  position: absolute;
+  white-space: pre;
+  margin: 0;
+  z-index: 1;
+}
+
+.pdf-page-canvas img {
+  max-width: none;
+  z-index: 1;
 }
 
 .video-placeholder-note {
@@ -1429,6 +1668,25 @@ p {
   font-weight: 600;
 }
 
+.dc-week-step.locked {
+  opacity: 0.55;
+  border-style: dashed;
+}
+
+.dc-week-step.locked .dc-week-step-num {
+  background: transparent;
+  font-size: 0.7rem;
+}
+
+.dc-week-gate-note {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  background: var(--badge-bg);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.75rem 0;
+}
+
 .dc-message-preview-list {
   list-style: none;
   padding: 0;
@@ -1618,5 +1876,36 @@ p {
   border-bottom: none;
   margin-bottom: 0;
   padding-bottom: 0;
+}
+
+/* ---- Help Desk ---- */
+
+.helpdesk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 0;
+  flex-wrap: wrap;
+}
+
+.helpdesk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.helpdesk-thread {
+  padding: 0;
+  overflow: hidden;
+}
+
+.helpdesk-thread .messenger-messages {
+  max-height: 28rem;
+}
+
+.helpdesk-compose {
+  border-radius: 0 0 var(--radius) var(--radius);
 }
 

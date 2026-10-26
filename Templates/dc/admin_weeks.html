@@ -73,7 +73,9 @@
           <li>
             <div class="video-admin-item">
               <strong>Day {{ v.day }} · {{ v.title }}</strong>
+              {% if v.miniokey %}
               <p class="card-meta" style="margin: 0.25rem 0;">Storage key: {{ v.miniokey }}</p>
+              {% endif %}
               <form method="post" class="inline-form" id="update-video-{{ v.videoid }}">
                 <input type="hidden" name="action" value="update_video">
                 <input type="hidden" name="videoid" value="{{ v.videoid }}">
@@ -87,21 +89,35 @@
                 </div>
                 <div class="form-group">
                   <label>MinIO key <span class="card-meta">(auto-updated after upload)</span></label>
-                  <input type="text" name="miniokey" value="{{ v.miniokey }}" required>
+                  <input type="text" name="miniokey" value="{{ v.miniokey or '' }}">
                 </div>
                 <div class="form-group">
                   <label>What to submit</label>
-                  <input type="text" name="instructions" value="{{ v.instructions }}" required>
+                  <input type="text" name="instructions" value="{{ v.instructions or '' }}">
                 </div>
                 <div class="form-group">
                   <label>Reflection on the assignment</label>
-                  <input type="text" name="reflection" value="{{ v.reflection }}" required>
+                  <input type="text" name="reflection" value="{{ v.reflection or '' }}">
                 </div>
               </form>
               <div class="video-upload-section">
                 <h4 class="video-upload-heading">Upload lesson video</h4>
                 {% with videoid=v.videoid %}
                   {% include "dc/_video_upload.html" %}
+                {% endwith %}
+              </div>
+              <div class="video-upload-section">
+                <h4 class="video-upload-heading">Upload lesson PDF</h4>
+                <p class="card-meta" style="margin: -0.35rem 0 0.65rem;">A stored PDF replaces the video player with a readable document viewer.</p>
+                {% with videoid=v.videoid %}
+                  {% include "dc/_pdf_upload.html" %}
+                {% endwith %}
+              </div>
+              <div class="video-upload-section">
+                <h4 class="video-upload-heading">Assignment instructions PDF</h4>
+                <p class="card-meta" style="margin: -0.35rem 0 0.65rem;">Shown to students at the end of the lesson, right above the assignment submission box.</p>
+                {% with videoid=v.videoid, pdf_kind="instructions" %}
+                  {% include "dc/_pdf_upload.html" %}
                 {% endwith %}
               </div>
               <div class="video-admin-actions">
@@ -135,10 +151,11 @@
           <label>Title</label>
           <input type="text" name="title" required>
         </div>
+        <p class="card-meta">After adding the lesson, upload its video from the lesson's <strong>Upload lesson video</strong> panel above — large files are sent in pieces there.</p>
         <div class="form-group">
-          <label>Lesson video file</label>
-          <input type="file" name="video_file" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v,.mpeg,.mpg">
-          <p class="card-meta" style="margin-top: 0.35rem;">Choose a file to upload and transcode automatically.</p>
+          <label>Lesson PDF file</label>
+          <input type="file" name="pdf_file" accept="application/pdf,.pdf">
+          <p class="card-meta" style="margin-top: 0.35rem;">Optional. A PDF is shown in the document viewer with read-aloud playback.</p>
         </div>
         <div class="form-group">
           <label>MinIO key <span class="card-meta">(optional if uploading a file)</span></label>
@@ -146,15 +163,15 @@
         </div>
         <div class="form-group">
           <label>Script</label>
-          <textarea name="script" required></textarea>
+          <textarea name="script"></textarea>
         </div>
         <div class="form-group">
           <label>What to submit</label>
-          <textarea name="instructions" required></textarea>
+          <textarea name="instructions"></textarea>
         </div>
         <div class="form-group">
           <label>Reflection on the assignment</label>
-          <textarea name="reflection" required placeholder="Instructor note on why this assignment matters…"></textarea>
+          <textarea name="reflection" placeholder="Instructor note on why this assignment matters…"></textarea>
         </div>
         <button type="submit" class="btn btn-primary btn-sm">Add video</button>
       </form>
@@ -165,4 +182,5 @@
 
 {% block dc_scripts %}
 <script src="{{ url_for('static', filename='js/dc_admin_upload.js') }}"></script>
+<script src="{{ url_for('static', filename='js/dc_admin_pdf_upload.js') }}"></script>
 {% endblock %}

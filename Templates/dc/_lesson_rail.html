@@ -3,23 +3,34 @@
   <h2 class="lesson-rail-title">Modules</h2>
   {% if lesson_rail %}
     {% for group in lesson_rail %}
-      <div class="lesson-week">
+      <div class="lesson-week {% if group.locked %}lesson-week-locked{% endif %}">
         <div class="lesson-week-label">
+          {% if group.locked %}<span class="lock-icon" aria-label="Locked">🔒</span>{% endif %}
           Week {{ group.week.num }} · {{ group.week.subject }}
           {% if group.week.branch and group.week.branch != 'shared' %}
             <span class="lesson-branch-tag">{{ group.week.branch | branch_label }}</span>
           {% endif %}
         </div>
+        {% if group.locked and group.previous_week %}
+          <p class="lesson-lock-note">Unlocks when every Week {{ group.previous_week.num }} assignment is satisfactory.</p>
+        {% endif %}
         <ul class="lesson-list">
           {% for v in group.videos %}
             <li class="lesson-item {% if v.current %}lesson-current{% endif %}">
-              <a href="{{ url_for('dc_video', videoid=v.videoid) }}">
-                <span class="lesson-check {% if v.watched %}watched{% endif %}"
-                      aria-label="{% if v.watched %}Watched{% else %}Not watched{% endif %}">
-                  {% if v.watched %}✓{% endif %}
+              {% if group.locked %}
+                <span class="lesson-link-locked">
+                  <span class="lesson-check" aria-hidden="true"></span>
+                  <span class="lesson-title"><span class="lesson-day-num">Day {{ v.day }}</span> {{ v.title }}</span>
                 </span>
-                <span class="lesson-title"><span class="lesson-day-num">Day {{ v.day }}</span> {{ v.title }}</span>
-              </a>
+              {% else %}
+                <a href="{{ url_for('dc_video', videoid=v.videoid) }}">
+                  <span class="lesson-check {% if v.watched %}watched{% endif %}"
+                        aria-label="{% if v.watched %}Watched{% else %}Not watched{% endif %}">
+                    {% if v.watched %}✓{% endif %}
+                  </span>
+                  <span class="lesson-title"><span class="lesson-day-num">Day {{ v.day }}</span> {{ v.title }}</span>
+                </a>
+              {% endif %}
             </li>
           {% endfor %}
         </ul>

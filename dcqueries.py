@@ -1,5 +1,5 @@
 """
-AARI Educational Suite — Data Center program database queries (dccourse).
+AARI Educational Suite — Data Center program database queries (bootcamp).
 
 Serves these app pages/features:
   - Login (student / admin auth)
@@ -9,6 +9,7 @@ Serves these app pages/features:
   - Admin grading queue and submission analytics dashboard
   - Cohort roster (About page with bios)
   - Messenger (general, division, direct channels)
+  - Help Desk (student ↔ admin 1:1 messages)
   - Admin CRUD (cohorts, students, weeks, videos, passwords)
 
 NOT YET SUPPORTED (no matching schema — do not invent columns):
@@ -19,7 +20,7 @@ NOT YET SUPPORTED (no matching schema — do not invent columns):
   - Course/division CRUD (Course rows are seeded; no create/update course)
 
 Database access: SQLAlchemy Core (raw SQL via text(), no ORM).
-All queries run against the dccourse database.
+All queries run against the bootcamp database.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ except ImportError:
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
-DC_DATABASE = "dccourse"
+DC_DATABASE = "bootcamp"
 ORCHESTRATION_COURSE_ID = 1
 
 _engine: Engine | None = None
@@ -146,7 +147,7 @@ def _video_in_course(videoid: int, courseid: int) -> bool:
     row = _one(
         """
         SELECT 1 AS ok
-        FROM video v
+        FROM content v
         JOIN Week w ON w.weekid = v.weekid
         WHERE v.videoid = :videoid AND w.courseid = :courseid
         LIMIT 1
@@ -185,13 +186,13 @@ def _curriculum_branch_clause(
     )
 
 
-def student_can_access_video(studentid: int, videoid: int) -> bool:
+def video_in_student_path(studentid: int, videoid: int) -> bool:
     """Return True if the video is in the student's division and branch path."""
     branch_clause, branch_params = _curriculum_branch_clause(studentid)
     row = _one(
         f"""
         SELECT 1 AS ok
-        FROM video v
+        FROM content v
         JOIN Week w ON w.weekid = v.weekid
         JOIN student s ON s.studentid = :studentid AND w.courseid = s.courseid
         WHERE v.videoid = :videoid
@@ -201,6 +202,59 @@ def student_can_access_video(studentid: int, videoid: int) -> bool:
         {"studentid": studentid, "videoid": videoid, **branch_params},
     )
     return row is not None
+
+
+def get_week_gate(studentid: int) -> dict[str, Any]:
+    """
+    Week-by-week unlock state for a student's curriculum path.
+
+    A week opens only after every lesson in each earlier week has a
+    satisfactory assignment; college students have every week open. Returns
+    the set of unlocked weekids, the week the student is working on, and the
+    first locked week (or None).
+    """
+    student = get_student_public(studentid)
+    branch_clause, branch_params = _curriculum_branch_clause(studentid)
+    weeks = _all(
+        f"""
+        SELECT w.weekid, w.num, w.subject,
+               COUNT(DISTINCT v.videoid) AS lesson_count,
+               COUNT(DISTINCT a.videoid) AS satisfactory_count
+        FROM Week w
+        JOIN student s ON s.studentid = :studentid AND w.courseid = s.courseid
+        LEFT JOIN content v ON v.weekid = w.weekid
+        LEFT JOIN assignment a
+            ON a.videoid = v.videoid
+           AND a.studentid = s.studentid
+           AND a.status = 'satisfactory'
+        WHERE 1 = 1
+        {branch_clause}
+        GROUP BY w.weekid, w.num, w.subject
+        ORDER BY w.num, w.weekid
+        """,
+        {"studentid": studentid, **branch_params},
+    )
+    if student and student.get("college"):
+        return {"unlocked": {w["weekid"] for w in weeks}, "current": None, "next_locked": None}
+    unlocked: set[int] = set()
+    current = None
+    next_locked = None
+    for week in weeks:
+        if current is not None:
+            next_locked = week
+            break
+        unlocked.add(week["weekid"])
+        if int(week["satisfactory_count"]) < int(week["lesson_count"]):
+            current = week
+    return {"unlocked": unlocked, "current": current, "next_locked": next_locked}
+
+
+def student_can_access_video(studentid: int, videoid: int) -> bool:
+    """Return True if the video is in the student's path and its week is unlocked."""
+    video = get_video(videoid)
+    if not video or not video_in_student_path(studentid, videoid):
+        return False
+    return video["weekid"] in get_week_gate(studentid)["unlocked"]
 
 
 def student_needs_branch_choice(studentid: int) -> bool:
@@ -318,7 +372,7 @@ def get_cross_cohort_engagement() -> list[dict[str, Any]]:
                        COUNT(DISTINCT v.videoid) AS total_videos
                 FROM student s2
                 JOIN Week w ON w.courseid = s2.courseid
-                JOIN video v ON v.weekid = w.weekid
+                JOIN content v ON v.weekid = w.weekid
                 WHERE (
                     s2.courseid != :orch_courseid
                     OR w.branch = 'shared'
@@ -343,7 +397,7 @@ def get_cross_cohort_engagement() -> list[dict[str, Any]]:
                    SUM(CASE WHEN a.status = 'submitted' THEN 1 ELSE 0 END) AS ungraded_count
             FROM student s
             JOIN Week w ON w.courseid = s.courseid
-            JOIN video v ON v.weekid = w.weekid
+            JOIN content v ON v.weekid = w.weekid
             LEFT JOIN assignment a
                 ON a.videoid = v.videoid AND a.studentid = s.studentid
             WHERE (
@@ -370,10 +424,10 @@ def get_student_by_email(email: str) -> dict[str, Any] | None:
     """Return full student row including password hash for auth verification."""
     return _one(
         """
-        SELECT studentid, fname, lname, email, password, courseid, cohortid, bio,
+        SELECT studentid, fname, lname, email, password, courseid, college, cohortid, bio,
                orchestration_branch
         FROM student
-        WHERE email = :email
+        WHERE LOWER(email) = LOWER(:email)
         LIMIT 1
         """,
         {"email": email},
@@ -386,7 +440,7 @@ def get_leader_by_email(email: str) -> dict[str, Any] | None:
         """
         SELECT leaderid, fname, lname, email, password, cohortid, bio
         FROM leader
-        WHERE email = :email
+        WHERE LOWER(email) = LOWER(:email)
         LIMIT 1
         """,
         {"email": email},
@@ -399,7 +453,7 @@ def get_admin_by_email(email: str) -> dict[str, Any] | None:
         """
         SELECT adminid, fname, lname, email, password
         FROM admin
-        WHERE email = :email
+        WHERE LOWER(email) = LOWER(:email)
         LIMIT 1
         """,
         {"email": email},
@@ -410,7 +464,7 @@ def get_student_public(studentid: int) -> dict[str, Any] | None:
     """Return student profile without password."""
     return _one(
         """
-        SELECT studentid, fname, lname, email, courseid, cohortid, bio,
+        SELECT studentid, fname, lname, email, courseid, college, cohortid, bio,
                orchestration_branch
         FROM student
         WHERE studentid = :studentid
@@ -441,6 +495,198 @@ def get_admin_public(adminid: int) -> dict[str, Any] | None:
         FROM admin
         WHERE adminid = :adminid
         LIMIT 1
+        """,
+        {"adminid": adminid},
+    )
+
+
+def get_all_admins() -> list[dict[str, Any]]:
+    """Return every platform admin (no passwords), with invite / sign-in status."""
+    return _all(
+        """
+        SELECT adminid, fname, lname, email, signed_in_at,
+               (password IS NOT NULL AND password != '') AS has_password
+        FROM admin
+        ORDER BY lname, fname
+        """
+    )
+
+
+def create_admin(
+    fname: str,
+    lname: str,
+    email: str,
+    password_hash: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Create a platform admin. password_hash may be None for first-login setup.
+    Returns None if the email is already in use on student, leader, or admin.
+    """
+    if _email_in_use(email):
+        return None
+    adminid = _insert(
+        """
+        INSERT INTO admin (fname, lname, email, password)
+        VALUES (:fname, :lname, :email, :password)
+        """,
+        {
+            "fname": fname,
+            "lname": lname,
+            "email": email,
+            "password": password_hash,
+        },
+    )
+    return get_admin_public(adminid)
+
+
+def set_admin_password(adminid: int, password_hash: str) -> dict[str, Any] | None:
+    """Set or replace an admin's password hash and mark them as signed in."""
+    rows = _run(
+        """
+        UPDATE admin
+        SET password = :password,
+            signed_in_at = COALESCE(signed_in_at, UTC_TIMESTAMP())
+        WHERE adminid = :adminid
+        """,
+        {"adminid": adminid, "password": password_hash},
+    )
+    if rows == 0:
+        return None
+    return get_admin_public(adminid)
+
+
+def mark_admin_signed_in(adminid: int) -> bool:
+    """Record first successful sign-in (e.g. Microsoft Entra) without setting a password."""
+    return (
+        _run(
+            """
+            UPDATE admin
+            SET signed_in_at = COALESCE(signed_in_at, UTC_TIMESTAMP())
+            WHERE adminid = :adminid
+            """,
+            {"adminid": adminid},
+        )
+        > 0
+    )
+
+
+def set_student_password(studentid: int, password_hash: str) -> bool:
+    """Set a student's password hash (first-login setup or reset)."""
+    return (
+        _run(
+            """
+            UPDATE student
+            SET password = :password
+            WHERE studentid = :studentid
+            """,
+            {"password": password_hash, "studentid": studentid},
+        )
+        > 0
+    )
+
+
+def set_leader_password(leaderid: int, password_hash: str) -> bool:
+    """Set a cohort leader's password hash (first-login setup or reset)."""
+    return (
+        _run(
+            """
+            UPDATE leader
+            SET password = :password
+            WHERE leaderid = :leaderid
+            """,
+            {"password": password_hash, "leaderid": leaderid},
+        )
+        > 0
+    )
+
+
+def list_helpdesk_admins() -> list[dict[str, Any]]:
+    """Platform admins for Help Desk (name + email for the calendar invite link)."""
+    return _all(
+        """
+        SELECT adminid, fname, lname, email
+        FROM admin
+        ORDER BY lname, fname
+        """
+    )
+
+
+def get_help_thread(studentid: int, adminid: int) -> list[dict[str, Any]]:
+    """Messages in one student–admin Help Desk thread, oldest first."""
+    return _all(
+        """
+        SELECT hm.help_messageid, hm.studentid, hm.adminid, hm.sender_type,
+               hm.content, hm.sendtime,
+               CASE
+                   WHEN hm.sender_type = 'student' THEN CONCAT(s.fname, ' ', s.lname)
+                   WHEN hm.sender_type = 'admin' THEN CONCAT(a.fname, ' ', a.lname)
+               END AS sender_name
+        FROM help_message hm
+        JOIN student s ON s.studentid = hm.studentid
+        JOIN admin a ON a.adminid = hm.adminid
+        WHERE hm.studentid = :studentid
+          AND hm.adminid = :adminid
+        ORDER BY hm.sendtime ASC, hm.help_messageid ASC
+        """,
+        {"studentid": studentid, "adminid": adminid},
+    )
+
+
+def post_help_message(
+    studentid: int,
+    adminid: int,
+    sender_type: str,
+    content: str,
+) -> dict[str, Any] | None:
+    """Insert a Help Desk message on the (student, admin) thread."""
+    if sender_type not in ("student", "admin"):
+        return None
+    text = (content or "").strip()
+    if not text:
+        return None
+    if not get_student_public(studentid) or not get_admin_public(adminid):
+        return None
+    help_messageid = _insert(
+        """
+        INSERT INTO help_message (studentid, adminid, sender_type, content)
+        VALUES (:studentid, :adminid, :sender_type, :content)
+        """,
+        {
+            "studentid": studentid,
+            "adminid": adminid,
+            "sender_type": sender_type,
+            "content": text,
+        },
+    )
+    return _one(
+        """
+        SELECT hm.help_messageid, hm.studentid, hm.adminid, hm.sender_type,
+               hm.content, hm.sendtime,
+               CASE
+                   WHEN hm.sender_type = 'student' THEN CONCAT(s.fname, ' ', s.lname)
+                   WHEN hm.sender_type = 'admin' THEN CONCAT(a.fname, ' ', a.lname)
+               END AS sender_name
+        FROM help_message hm
+        JOIN student s ON s.studentid = hm.studentid
+        JOIN admin a ON a.adminid = hm.adminid
+        WHERE hm.help_messageid = :help_messageid
+        LIMIT 1
+        """,
+        {"help_messageid": help_messageid},
+    )
+
+
+def list_helpdesk_students_for_admin(adminid: int) -> list[dict[str, Any]]:
+    """Students who have a Help Desk thread with this admin, newest activity first."""
+    return _all(
+        """
+        SELECT s.studentid, s.fname, s.lname, s.email,
+               MAX(hm.sendtime) AS last_sendtime
+        FROM help_message hm
+        JOIN student s ON s.studentid = hm.studentid
+        WHERE hm.adminid = :adminid
+        GROUP BY s.studentid, s.fname, s.lname, s.email
+        ORDER BY last_sendtime DESC
         """,
         {"adminid": adminid},
     )
@@ -560,8 +806,8 @@ def get_videos_for_week(weekid: int) -> list[dict[str, Any]]:
     """Return all videos for a week, ordered by lecture day then videoid."""
     return _all(
         """
-        SELECT videoid, weekid, day, title, miniokey, script, instructions, reflection
-        FROM video
+        SELECT videoid, weekid, day, title, miniokey, pdfkey, instructionskey, script, instructions, reflection
+        FROM content
         WHERE weekid = :weekid
         ORDER BY day, videoid
         """,
@@ -573,8 +819,8 @@ def get_video(videoid: int) -> dict[str, Any] | None:
     """Return a single video row including instructions, or None."""
     return _one(
         """
-        SELECT videoid, weekid, day, title, miniokey, script, instructions, reflection
-        FROM video
+        SELECT videoid, weekid, day, title, miniokey, pdfkey, instructionskey, script, instructions, reflection
+        FROM content
         WHERE videoid = :videoid
         LIMIT 1
         """,
@@ -586,9 +832,9 @@ def get_videos_for_course(courseid: int) -> list[dict[str, Any]]:
     """Return all videos in a division via Week, ordered by week num then videoid."""
     return _all(
         """
-        SELECT v.videoid, v.weekid, v.day, v.title, v.miniokey, v.script, v.instructions, v.reflection,
+        SELECT v.videoid, v.weekid, v.day, v.title, v.miniokey, v.pdfkey, v.instructionskey, v.script, v.instructions, v.reflection,
                w.num AS week_num, w.subject AS week_subject, w.branch AS week_branch
-        FROM video v
+        FROM content v
         JOIN Week w ON w.weekid = v.weekid
         WHERE w.courseid = :courseid
         ORDER BY w.num, v.day, v.videoid
@@ -605,9 +851,9 @@ def get_videos_for_student(studentid: int) -> list[dict[str, Any]]:
     branch_clause, branch_params = _curriculum_branch_clause(studentid, "w")
     return _all(
         f"""
-        SELECT v.videoid, v.weekid, v.day, v.title, v.miniokey, v.script, v.instructions, v.reflection,
+        SELECT v.videoid, v.weekid, v.day, v.title, v.miniokey, v.pdfkey, v.instructionskey, v.script, v.instructions, v.reflection,
                w.num AS week_num, w.subject AS week_subject, w.branch AS week_branch
-        FROM video v
+        FROM content v
         JOIN Week w ON w.weekid = v.weekid
         WHERE w.courseid = :courseid
         {branch_clause}
@@ -651,11 +897,15 @@ def get_cohort(cohortid: int) -> dict[str, Any] | None:
 def get_all_students(
     cohortid: int | None = None,
     courseid: int | None = None,
+    *,
+    without_cohort: bool = False,
 ) -> list[dict[str, Any]]:
     """List students for admin management, optionally filtered by cohort or division."""
     clauses = ["1=1"]
     params: dict[str, Any] = {}
-    if cohortid is not None:
+    if without_cohort:
+        clauses.append("s.cohortid IS NULL")
+    elif cohortid is not None:
         clauses.append("s.cohortid = :cohortid")
         params["cohortid"] = cohortid
     if courseid is not None:
@@ -665,12 +915,12 @@ def get_all_students(
     return _all(
         f"""
         SELECT s.studentid, s.fname, s.lname, s.email, s.bio,
-               s.courseid, s.cohortid, s.orchestration_branch,
+               s.courseid, s.college, s.cohortid, s.orchestration_branch,
                c.name AS division_name,
                co.name AS cohort_name, co.region AS cohort_region
         FROM student s
         JOIN Course c ON c.courseid = s.courseid
-        JOIN cohort co ON co.cohortid = s.cohortid
+        LEFT JOIN cohort co ON co.cohortid = s.cohortid
         WHERE {where}
         ORDER BY co.name, c.name, s.lname, s.fname
         """,
@@ -694,7 +944,7 @@ def get_students_progress_for_course(
                SUM(CASE WHEN p.watched THEN 1 ELSE 0 END) AS watched_videos
         FROM student s
         JOIN Week w ON w.courseid = s.courseid
-        JOIN video v ON v.weekid = w.weekid
+        JOIN content v ON v.weekid = w.weekid
         LEFT JOIN progress p
             ON p.videoid = v.videoid AND p.studentid = s.studentid
         WHERE s.courseid = :courseid
@@ -838,7 +1088,7 @@ def get_progress_for_student(studentid: int) -> list[dict[str, Any]]:
         SELECT p.studentid, p.videoid, p.watched, p.last_position, p.updated_at,
                v.title AS video_title, w.num AS week_num, v.day AS day_num, w.courseid
         FROM progress p
-        JOIN video v ON v.videoid = p.videoid
+        JOIN content v ON v.videoid = p.videoid
         JOIN Week w ON w.weekid = v.weekid
         JOIN student s ON s.studentid = p.studentid AND w.courseid = s.courseid
         WHERE p.studentid = :studentid
@@ -861,7 +1111,7 @@ def get_course_completion(studentid: int) -> dict[str, Any]:
             SUM(CASE WHEN p.watched = TRUE THEN 1 ELSE 0 END) AS watched_videos
         FROM student s
         JOIN Week w ON w.courseid = s.courseid
-        JOIN video v ON v.weekid = w.weekid
+        JOIN content v ON v.weekid = w.weekid
         LEFT JOIN progress p
             ON p.videoid = v.videoid AND p.studentid = s.studentid
         WHERE s.studentid = :studentid
@@ -903,7 +1153,7 @@ def get_resume_point(studentid: int) -> dict[str, Any] | None:
         SELECT p.studentid, p.videoid, p.watched, p.last_position, p.updated_at,
                v.title AS video_title, v.miniokey, w.num AS week_num, v.day AS day_num, w.courseid
         FROM progress p
-        JOIN video v ON v.videoid = p.videoid
+        JOIN content v ON v.videoid = p.videoid
         JOIN Week w ON w.weekid = v.weekid
         JOIN student s ON s.studentid = p.studentid AND w.courseid = s.courseid
         WHERE p.studentid = :studentid
@@ -922,7 +1172,7 @@ def get_resume_point(studentid: int) -> dict[str, Any] | None:
         SELECT p.studentid, p.videoid, p.watched, p.last_position, p.updated_at,
                v.title AS video_title, v.miniokey, w.num AS week_num, v.day AS day_num, w.courseid
         FROM progress p
-        JOIN video v ON v.videoid = p.videoid
+        JOIN content v ON v.videoid = p.videoid
         JOIN Week w ON w.weekid = v.weekid
         JOIN student s ON s.studentid = p.studentid AND w.courseid = s.courseid
         WHERE p.studentid = :studentid
@@ -963,6 +1213,32 @@ def submit_assignment(
         """,
         {"videoid": videoid, "studentid": studentid, "miniokey": miniokey},
     )
+    return get_assignment(assignmentid)
+
+
+def resubmit_assignment(
+    assignmentid: int,
+    studentid: int,
+    miniokey: str,
+) -> dict[str, Any] | None:
+    """
+    Replace the file on an 'unsatisfactory' submission and send it back for review.
+
+    Earlier feedback is kept so the student can still see it until it is regraded.
+    Returns None unless the row belongs to the student and is currently unsatisfactory.
+    """
+    rows = _run(
+        """
+        UPDATE assignment
+        SET miniokey = :miniokey, status = 'submitted', submitted_at = CURRENT_TIMESTAMP
+        WHERE assignmentid = :assignmentid
+          AND studentid = :studentid
+          AND status = 'unsatisfactory'
+        """,
+        {"assignmentid": assignmentid, "studentid": studentid, "miniokey": miniokey},
+    )
+    if rows == 0:
+        return None
     return get_assignment(assignmentid)
 
 
@@ -1011,7 +1287,7 @@ def get_assignments_for_course(
                v.title AS video_title, w.num AS week_num, v.day AS day_num, w.subject AS week_subject,
                s.fname, s.lname, s.email
         FROM assignment a
-        JOIN video v ON v.videoid = a.videoid
+        JOIN content v ON v.videoid = a.videoid
         JOIN Week w ON w.weekid = v.weekid
         JOIN student s ON s.studentid = a.studentid
         WHERE w.courseid = :courseid
@@ -1036,7 +1312,7 @@ def get_assignments_for_student(studentid: int) -> list[dict[str, Any]]:
                v.title AS video_title, w.num AS week_num, v.day AS day_num,
                w.subject AS week_subject, w.branch AS week_branch
         FROM assignment a
-        JOIN video v ON v.videoid = a.videoid
+        JOIN content v ON v.videoid = a.videoid
         JOIN Week w ON w.weekid = v.weekid
         JOIN student s ON s.studentid = a.studentid AND w.courseid = s.courseid
         WHERE a.studentid = :studentid
@@ -1133,7 +1409,7 @@ def get_submission_analytics(
                COUNT(a.assignmentid) AS submitted_count,
                SUM(CASE WHEN a.status IN ('satisfactory', 'unsatisfactory') THEN 1 ELSE 0 END) AS graded_count,
                SUM(CASE WHEN a.status = 'submitted' THEN 1 ELSE 0 END) AS ungraded_count
-        FROM video v
+        FROM content v
         JOIN Week w ON w.weekid = v.weekid
         {cohort_assignment_join}
         WHERE w.courseid = :courseid
@@ -1149,7 +1425,7 @@ def get_submission_analytics(
                w.num AS week_num, v.day AS day_num
         FROM student s
         JOIN Week w ON w.courseid = s.courseid
-        JOIN video v ON v.weekid = w.weekid
+        JOIN content v ON v.weekid = w.weekid
         LEFT JOIN assignment a
             ON a.videoid = v.videoid AND a.studentid = s.studentid
         WHERE s.courseid = :courseid
@@ -1807,7 +2083,7 @@ def _email_in_use(email: str) -> bool:
     """Return True if email exists on student, leader, or admin."""
     for table, col in (("student", "studentid"), ("leader", "leaderid"), ("admin", "adminid")):
         row = _one(
-            f"SELECT {col} AS id FROM `{table}` WHERE email = :email LIMIT 1",
+            f"SELECT {col} AS id FROM `{table}` WHERE LOWER(email) = LOWER(:email) LIMIT 1",
             {"email": email},
         )
         if row:
@@ -1875,12 +2151,13 @@ def create_leader(
     fname: str,
     lname: str,
     email: str,
-    password_hash: str,
+    password_hash: str | None,
     cohortid: int,
     bio: str | None = None,
 ) -> dict[str, Any] | None:
     """
     Create a cohort leader (no division track). One leader per cohort.
+    password_hash may be None for first-login / Microsoft setup.
     Returns None if email is duplicate or cohort already has a leader.
     """
     if _email_in_use(email):
@@ -1915,16 +2192,11 @@ def create_cohort_with_leader(
     leader_password_hash: str | None = None,
     leader_bio: str | None = None,
 ) -> dict[str, Any] | None:
-    """Create a cohort and optionally assign its leader in one step."""
+    """Create a cohort and optionally invite its leader (password optional)."""
     cohort = create_cohort(region, name)
     if not cohort:
         return None
-    if (
-        leader_fname
-        and leader_lname
-        and leader_email
-        and leader_password_hash
-    ):
+    if leader_fname and leader_lname and leader_email:
         leader = create_leader(
             leader_fname,
             leader_lname,
@@ -2020,19 +2292,23 @@ def create_student(
     fname: str,
     lname: str,
     email: str,
-    password_hash: str,
+    password_hash: str | None,
     courseid: int,
-    cohortid: int,
+    cohortid: int | None,
     bio: str | None = None,
     orchestration_branch: str | None = None,
+    college: bool = False,
 ) -> dict[str, Any] | None:
     """
-    Create a student with an already-bcrypt-hashed password.
+    Create a student. password_hash may be None for first-login / Microsoft setup.
 
     Adds them to the cohort general channel and their division channel.
+    Only college students may be created without a cohort.
     Returns None if email is duplicate.
     """
     if _email_in_use(email):
+        return None
+    if cohortid is None and not college:
         return None
 
     branch: str | None = None
@@ -2042,8 +2318,8 @@ def create_student(
 
     studentid = _insert(
         """
-        INSERT INTO student (fname, lname, email, password, courseid, cohortid, bio, orchestration_branch)
-        VALUES (:fname, :lname, :email, :password, :courseid, :cohortid, :bio, :orchestration_branch)
+        INSERT INTO student (fname, lname, email, password, courseid, college, cohortid, bio, orchestration_branch)
+        VALUES (:fname, :lname, :email, :password, :courseid, :college, :cohortid, :bio, :orchestration_branch)
         """,
         {
             "fname": fname,
@@ -2051,17 +2327,19 @@ def create_student(
             "email": email,
             "password": password_hash,
             "courseid": courseid,
+            "college": bool(college),
             "cohortid": cohortid,
             "bio": bio,
             "orchestration_branch": branch,
         },
     )
 
-    general_id = _general_channel_for_cohort(cohortid)
-    division_id = _division_channel_for_student(cohortid, courseid)
-    for channelid in (general_id, division_id):
-        if channelid is not None:
-            enroll_student_in_channel(channelid, studentid)
+    if cohortid is not None:
+        general_id = _general_channel_for_cohort(cohortid)
+        division_id = _division_channel_for_student(cohortid, courseid)
+        for channelid in (general_id, division_id):
+            if channelid is not None:
+                enroll_student_in_channel(channelid, studentid)
 
     return get_student_public(studentid)
 
@@ -2133,6 +2411,7 @@ def delete_student(studentid: int, cohortid: int | None = None) -> bool:
         return False
     if not get_student_public(studentid):
         return False
+    _run("DELETE FROM help_message WHERE studentid = :studentid", {"studentid": studentid})
     _run("DELETE FROM assignment WHERE studentid = :studentid", {"studentid": studentid})
     _run("DELETE FROM progress WHERE studentid = :studentid", {"studentid": studentid})
     _run(
@@ -2221,29 +2500,36 @@ def delete_week(weekid: int) -> bool:
     return _run("DELETE FROM Week WHERE weekid = :weekid", {"weekid": weekid}) > 0
 
 
+def _blank_to_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 def create_video(
     weekid: int,
     day: int,
     title: str,
-    miniokey: str,
-    script: str,
-    instructions: str,
-    reflection: str,
+    miniokey: str | None = None,
+    script: str | None = None,
+    instructions: str | None = None,
+    reflection: str | None = None,
 ) -> dict[str, Any] | None:
-    """Insert a video for a week on a specific lecture day (1–3)."""
+    """Insert a lesson day. Video/PDF keys and copy fields may be filled in later."""
     videoid = _insert(
         """
-        INSERT INTO video (weekid, day, title, miniokey, script, instructions, reflection)
+        INSERT INTO content (weekid, day, title, miniokey, script, instructions, reflection)
         VALUES (:weekid, :day, :title, :miniokey, :script, :instructions, :reflection)
         """,
         {
             "weekid": weekid,
             "day": day,
             "title": title,
-            "miniokey": miniokey,
-            "script": script,
-            "instructions": instructions,
-            "reflection": reflection,
+            "miniokey": _blank_to_none(miniokey),
+            "script": _blank_to_none(script),
+            "instructions": _blank_to_none(instructions),
+            "reflection": _blank_to_none(reflection),
         },
     )
     return get_video(videoid)
@@ -2253,15 +2539,15 @@ def update_video(
     videoid: int,
     day: int,
     title: str,
-    miniokey: str,
-    script: str,
-    instructions: str,
-    reflection: str,
+    miniokey: str | None = None,
+    script: str | None = None,
+    instructions: str | None = None,
+    reflection: str | None = None,
 ) -> dict[str, Any] | None:
     """Update a video row."""
     rows = _run(
         """
-        UPDATE video
+        UPDATE content
         SET day = :day, title = :title, miniokey = :miniokey,
             script = :script, instructions = :instructions, reflection = :reflection
         WHERE videoid = :videoid
@@ -2270,10 +2556,10 @@ def update_video(
             "videoid": videoid,
             "day": day,
             "title": title,
-            "miniokey": miniokey,
-            "script": script,
-            "instructions": instructions,
-            "reflection": reflection,
+            "miniokey": _blank_to_none(miniokey),
+            "script": _blank_to_none(script),
+            "instructions": _blank_to_none(instructions),
+            "reflection": _blank_to_none(reflection),
         },
     )
     if rows == 0:
@@ -2285,7 +2571,7 @@ def update_video_miniokey(videoid: int, miniokey: str) -> dict[str, Any] | None:
     """Update only the MinIO object key for a video (after transcode upload)."""
     rows = _run(
         """
-        UPDATE video
+        UPDATE content
         SET miniokey = :miniokey
         WHERE videoid = :videoid
         """,
@@ -2296,6 +2582,36 @@ def update_video_miniokey(videoid: int, miniokey: str) -> dict[str, Any] | None:
     return get_video(videoid)
 
 
+def update_video_pdfkey(videoid: int, pdfkey: str | None) -> dict[str, Any] | None:
+    """Update only the MinIO object key for a lesson PDF (after document upload)."""
+    rows = _run(
+        """
+        UPDATE content
+        SET pdfkey = :pdfkey
+        WHERE videoid = :videoid
+        """,
+        {"videoid": videoid, "pdfkey": pdfkey},
+    )
+    if rows == 0:
+        return None
+    return get_video(videoid)
+
+
+def update_video_instructionskey(videoid: int, instructionskey: str | None) -> dict[str, Any] | None:
+    """Update only the MinIO object key for a lesson's assignment instructions PDF."""
+    rows = _run(
+        """
+        UPDATE content
+        SET instructionskey = :instructionskey
+        WHERE videoid = :videoid
+        """,
+        {"videoid": videoid, "instructionskey": instructionskey},
+    )
+    if rows == 0:
+        return None
+    return get_video(videoid)
+
+
 def delete_video(videoid: int) -> bool:
     """Delete a video. Fails if assignments or progress reference it."""
-    return _run("DELETE FROM video WHERE videoid = :videoid", {"videoid": videoid}) > 0
+    return _run("DELETE FROM content WHERE videoid = :videoid", {"videoid": videoid}) > 0

@@ -11,6 +11,7 @@
       {% for co in all_cohorts %}
         <option value="{{ co.cohortid }}" {% if cohort and co.cohortid == cohort.cohortid %}selected{% endif %}>{{ co.name }}</option>
       {% endfor %}
+      <option value="none" {% if no_cohort_view %}selected{% endif %}>No cohort (college students)</option>
     </select>
   </div>
 </form>
@@ -19,13 +20,19 @@
 <p style="color: var(--text-muted); margin-bottom: 1.25rem;">
   {% if user_is_dc_leader %}
     Learners in <strong>{{ cohort.name }}</strong> ({{ cohort.region }}). New accounts are added to your cohort automatically.
+  {% elif no_cohort_view %}
+    College students who are not part of a cohort. They have no cohort leader, are graded by platform admins,
+    and can open every week of their division without waiting on assignment grades.
   {% else %}
     Students in <strong>{{ cohort.name }}</strong> ({{ cohort.region }}).
   {% endif %}
 </p>
 
 <section class="teacher-panel">
-  <h3>Create student</h3>
+  <h3>Invite student</h3>
+  <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">
+    Add by email only. They sign in with Microsoft, or with that email to choose their own password on first login.
+  </p>
   <form method="post">
     <input type="hidden" name="action" value="create_student">
     <div class="inline-form">
@@ -40,10 +47,6 @@
       <div class="form-group">
         <label>Email</label>
         <input type="email" name="email" required>
-      </div>
-      <div class="form-group">
-        <label>Initial password</label>
-        <input type="password" name="password" required>
       </div>
       <div class="form-group">
         <label>Division</label>
@@ -66,11 +69,17 @@
       <label>Bio (optional)</label>
       <textarea name="bio"></textarea>
     </div>
-    <button type="submit" class="btn btn-primary btn-sm">Create student</button>
+    <div class="form-group">
+      <label>
+        <input type="checkbox" name="college" {% if no_cohort_view %}checked disabled{% endif %}>
+        College student (full course access; weeks are not locked behind assignments)
+      </label>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Invite {% if no_cohort_view %}college {% endif %}student</button>
   </form>
 </section>
 
-<h2>Students in your cohort</h2>
+<h2>{% if no_cohort_view %}College students without a cohort{% else %}Students in your cohort{% endif %}</h2>
 {% if students %}
 <div class="table-wrap card" style="padding:0; overflow:hidden;">
   <table class="data-table">
@@ -81,6 +90,7 @@
         <th>Email</th>
         <th>Division</th>
         <th>Branch</th>
+        <th>Type</th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -92,6 +102,7 @@
           <td>{{ s.email }}</td>
           <td>{{ s.division_name }}</td>
           <td>{% if s.orchestration_branch %}{{ s.orchestration_branch | capitalize }}{% else %}—{% endif %}</td>
+          <td>{% if s.college %}<span class="badge">College</span>{% else %}Cohort{% endif %}</td>
           <td>
             <form method="post" style="display:inline;" onsubmit="return confirm('Remove this student permanently?');">
               <input type="hidden" name="action" value="delete_student">
@@ -105,20 +116,6 @@
   </table>
 </div>
 {% else %}
-  <p class="empty-state">No students in your cohort yet.</p>
+  <p class="empty-state">{% if no_cohort_view %}No college students without a cohort yet.{% else %}No students in your cohort yet.{% endif %}</p>
 {% endif %}
-
-<h2 style="margin-top: 1.5rem;">Reset password</h2>
-<form method="post" class="inline-form">
-  <input type="hidden" name="action" value="reset_password">
-  <div class="form-group">
-    <label>Student ID</label>
-    <input type="number" name="studentid" required min="1">
-  </div>
-  <div class="form-group">
-    <label>New password</label>
-    <input type="password" name="new_password" required>
-  </div>
-  <button type="submit" class="btn btn-secondary btn-sm">Reset</button>
-</form>
 {% endblock %}

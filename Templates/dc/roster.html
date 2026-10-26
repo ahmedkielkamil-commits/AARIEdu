@@ -83,6 +83,8 @@
       {{ member_card(member) }}
     {% endfor %}
   </div>
+{% elif no_cohort_student %}
+  <p class="empty-state">You are enrolled as a college student without a cohort, so there is no cohort roster to show.</p>
 {% else %}
   <p class="empty-state">No roster members found.</p>
 {% endif %}

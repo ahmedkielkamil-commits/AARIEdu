@@ -37,7 +37,13 @@ TRANSCODE_QUEUE_TIMEOUT_SECONDS = int(
         os.getenv("TRANSCODE_TIMEOUT_SECONDS", "20"),
     )
 )
-TRANSCODE_JOB_TIMEOUT = int(os.getenv("TRANSCODE_JOB_TIMEOUT", "3600"))
+TRANSCODE_JOB_TIMEOUT = int(os.getenv("TRANSCODE_JOB_TIMEOUT", "10800"))
+# Chunked uploads keep each request small enough for hosting proxies (~100 MB caps).
+UPLOAD_KEY_PREFIX = "dc:upload:"
+UPLOAD_CHUNK_BYTES = int(os.getenv("VIDEO_UPLOAD_CHUNK_BYTES", str(16 * 1024 * 1024)))
+UPLOAD_CHUNK_MAX_BYTES = 64 * 1024 * 1024
+UPLOAD_MAX_BYTES = int(os.getenv("VIDEO_UPLOAD_MAX_BYTES", str(5 * 1024 * 1024 * 1024)))
+UPLOAD_SESSION_TTL_SECONDS = 6 * 3600
 PRESIGNED_EXPIRY_SECONDS = int(os.getenv("MINIO_PRESIGNED_EXPIRY", "3600"))
 ALLOWED_UPLOAD_EXTENSIONS = frozenset(
     {"mp4", "mov", "mkv", "webm", "avi", "m4v", "mpeg", "mpg"}
@@ -168,8 +174,9 @@ def _enrich_processing_status(data: dict[str, Any], conn) -> dict[str, Any]:
         workers = Worker.all(connection=conn)
         if not workers:
             data["hint"] = (
-                "No transcode worker is running. In a second terminal: "
-                "rq worker --url redis://localhost:6379/0 dc-transcode"
+                "No transcode worker is running. Locally, start one with "
+                "`rq worker --url redis://localhost:6379/0 dc-transcode`; in Docker/Railway "
+                "it starts with the container, so check REDIS_URL and the deploy logs."
             )
         elif shutil.which("ffmpeg") is None:
             data["hint"] = "ffmpeg is not installed (macOS: brew install ffmpeg)."
@@ -270,17 +277,21 @@ def _object_key_for_video(videoid: int) -> str:
     return f"videos/dc/{videoid}.mp4"
 
 
-def _save_upload_to_temp(upload: FileStorage) -> Path:
-    if not upload or not upload.filename:
-        raise ValueError("No video file provided.")
-
-    ext = Path(secure_filename(upload.filename)).suffix.lstrip(".").lower()
+def _upload_extension(filename: str | None) -> str:
+    ext = Path(secure_filename(filename or "")).suffix.lstrip(".").lower()
     if ext not in ALLOWED_UPLOAD_EXTENSIONS:
         raise ValueError(
             f"Unsupported format '.{ext}'. "
             f"Allowed: {', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}"
         )
+    return ext
 
+
+def _save_upload_to_temp(upload: FileStorage) -> Path:
+    if not upload or not upload.filename:
+        raise ValueError("No video file provided.")
+
+    ext = _upload_extension(upload.filename)
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     dest = TMP_DIR / f"upload-{uuid.uuid4().hex}.{ext}"
     upload.save(dest)
@@ -293,11 +304,126 @@ def enqueue_video_upload(videoid: int, upload: FileStorage) -> dict[str, Any]:
 
     Returns immediately with status ``processing`` and the RQ job id.
     """
-    video = dq.get_video(videoid)
-    if not video:
+    if not dq.get_video(videoid):
         raise ValueError(f"Video {videoid} not found.")
+    return _enqueue_transcode(videoid, _save_upload_to_temp(upload))
 
-    source_path = _save_upload_to_temp(upload)
+
+# ---------------------------------------------------------------------------
+# Chunked upload: start -> chunk (repeated) -> finish, all in this container's TMP_DIR
+# ---------------------------------------------------------------------------
+
+
+def _upload_session_key(upload_id: str) -> str:
+    return f"{UPLOAD_KEY_PREFIX}{upload_id}"
+
+
+def _load_upload_session(upload_id: str, videoid: int) -> tuple[dict[str, Any], Path]:
+    if not upload_id.isalnum():
+        raise ValueError("Unknown upload.")
+    raw = redis_jobs.get_redis_connection().get(_upload_session_key(upload_id))
+    if not raw:
+        raise ValueError("This upload expired or was cancelled. Start it again.")
+    session = json.loads(raw)
+    if session["videoid"] != videoid:
+        raise ValueError("Upload does not belong to this lesson.")
+    return session, Path(session["path"])
+
+
+def _remove_stale_partial_uploads() -> None:
+    cutoff = datetime.now(timezone.utc).timestamp() - UPLOAD_SESSION_TTL_SECONDS
+    for path in TMP_DIR.glob("chunked-*.part"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+        except OSError:
+            pass
+
+
+def start_chunked_upload(videoid: int, filename: str, total_size: int) -> dict[str, Any]:
+    """Open an upload session and return its id plus the chunk size to use."""
+    if not dq.get_video(videoid):
+        raise ValueError(f"Video {videoid} not found.")
+    ext = _upload_extension(filename)
+    if total_size <= 0:
+        raise ValueError("The video file is empty.")
+    if total_size > UPLOAD_MAX_BYTES:
+        raise ValueError(
+            f"Video is too large (max {UPLOAD_MAX_BYTES // (1024 ** 3)} GB)."
+        )
+
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    _remove_stale_partial_uploads()
+    upload_id = uuid.uuid4().hex
+    path = TMP_DIR / f"chunked-{upload_id}.{ext}.part"
+    path.touch()
+    redis_jobs.get_redis_connection().set(
+        _upload_session_key(upload_id),
+        json.dumps(
+            {"videoid": videoid, "path": str(path), "ext": ext, "total_size": total_size}
+        ),
+        ex=UPLOAD_SESSION_TTL_SECONDS,
+    )
+    return {"upload_id": upload_id, "chunk_size": UPLOAD_CHUNK_BYTES}
+
+
+def append_upload_chunk(
+    videoid: int, upload_id: str, offset: int, stream, length: int | None
+) -> dict[str, Any]:
+    """
+    Write one chunk at ``offset``. Re-sending a chunk (a retry) overwrites
+    from that offset, so a dropped request can simply be sent again.
+    """
+    session, path = _load_upload_session(upload_id, videoid)
+    if not length or length > UPLOAD_CHUNK_MAX_BYTES:
+        raise ValueError("Chunk is missing or too large.")
+    received = path.stat().st_size
+    if offset > received:
+        raise ValueError(f"Chunk out of order (have {received} bytes).")
+    if offset + length > session["total_size"]:
+        raise ValueError("Chunk goes past the end of the file.")
+
+    with path.open("r+b") as out:
+        out.truncate(offset)
+        out.seek(offset)
+        shutil.copyfileobj(stream, out, 1024 * 1024)
+    received = path.stat().st_size
+    if received != offset + length:
+        raise ValueError("Chunk was cut off. Retry it.")
+
+    redis_jobs.get_redis_connection().expire(
+        _upload_session_key(upload_id), UPLOAD_SESSION_TTL_SECONDS
+    )
+    return {"received": received, "total_size": session["total_size"]}
+
+
+def finish_chunked_upload(videoid: int, upload_id: str) -> dict[str, Any]:
+    """Check the file is complete, then hand it to the transcode worker."""
+    session, path = _load_upload_session(upload_id, videoid)
+    received = path.stat().st_size if path.is_file() else 0
+    if received != session["total_size"]:
+        raise ValueError(
+            f"Upload incomplete ({received} of {session['total_size']} bytes)."
+        )
+    source_path = path.with_name(f"upload-{upload_id}.{session['ext']}")
+    path.rename(source_path)
+    redis_jobs.get_redis_connection().delete(_upload_session_key(upload_id))
+    return _enqueue_transcode(videoid, source_path)
+
+
+def abort_chunked_upload(videoid: int, upload_id: str) -> None:
+    try:
+        _, path = _load_upload_session(upload_id, videoid)
+    except ValueError:
+        return
+    redis_jobs.get_redis_connection().delete(_upload_session_key(upload_id))
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as err:
+        logger.warning("Could not remove partial upload %s: %s", path, err)
+
+
+def _enqueue_transcode(videoid: int, source_path: Path) -> dict[str, Any]:
     queue = redis_jobs.get_queue(TRANSCODE_QUEUE)
     job = queue.enqueue(
         transcode_video_job,

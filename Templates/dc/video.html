@@ -7,7 +7,24 @@
 {% endblock %}
 
 {% block dc_content %}
-{% if stream_url %}
+{% if video.pdfkey %}
+<div class="doc-viewer"
+     data-videoid="{{ video.videoid }}"
+     data-title="{{ video.title }}"
+     data-extract-url="{{ url_for('api_extract_pdf') }}"
+     data-speak-url="{{ url_for('api_speak') }}">
+  <div class="doc-toolbar">
+    <button type="button" class="btn btn-primary btn-sm doc-play-btn" disabled>Read aloud</button>
+    <button type="button" class="btn btn-secondary btn-sm doc-stop-btn" hidden>Stop</button>
+    <button type="button" class="btn btn-secondary btn-sm doc-fullscreen-btn" aria-pressed="false">Full screen</button>
+    <span class="doc-status card-meta" aria-live="polite">Loading document…</span>
+  </div>
+  <audio class="doc-audio" controls controlslist="nodownload" hidden preload="none">
+    Your browser does not support audio playback.
+  </audio>
+  <div class="doc-body" aria-busy="true"></div>
+</div>
+{% elif stream_url %}
 <div class="video-player-wrap">
   <video class="video-player" controls playsinline preload="metadata" src="{{ stream_url }}">
     Your browser does not support embedded video.
@@ -30,6 +47,20 @@
 </p>
 {% endif %}
 
+{% if video.instructionskey or video.instructions %}
+<div class="card assignment-instructions">
+  <h2>Assignment instructions</h2>
+  {% if video.instructions %}
+  <p style="white-space: pre-wrap;">{{ video.instructions }}</p>
+  {% endif %}
+  {% if video.instructionskey %}
+  <p style="margin: 0;">
+    <a href="{{ url_for('dc_video_instructions_pdf', videoid=video.videoid) }}" target="_blank" rel="noopener">Assignment instructions (PDF)</a>
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if video.reflection %}
 <div class="card instructor-reflection">
   <h2>Reflection on the assignment</h2>
@@ -38,15 +69,12 @@
 </div>
 {% endif %}
 
-<div class="card">
-  <h2>What to submit</h2>
-  <p style="white-space: pre-wrap; margin: 0;">{{ video.instructions }}</p>
-</div>
-
+{% if video.script %}
 <div class="card">
   <h2>Script</h2>
   <p style="white-space: pre-wrap; margin: 0; color: var(--text-muted); font-size: 0.95rem;">{{ video.script }}</p>
 </div>
+{% endif %}
 
 {% if not user_is_dc_cohort_staff %}
 <form method="post" class="inline-form" style="margin-bottom: 1.5rem;">
@@ -67,26 +95,39 @@
         {{ assignment.status }}
       </span>
     </p>
-    {% if assignment.feedback %}
-      <div class="card" style="margin-top: 0.75rem;">
-        <strong>Instructor feedback</strong>
-        <p style="margin: 0.35rem 0 0; white-space: pre-wrap;">{{ assignment.feedback }}</p>
-      </div>
-    {% elif assignment.status == 'submitted' %}
+    {% if assignment.status == 'submitted' %}
       <p class="instructor-placeholder">Awaiting review.</p>
     {% endif %}
-    <p class="card-meta">File key: {{ assignment.miniokey }}</p>
+    {% if assignment.feedback %}
+      <div class="card" style="margin-top: 0.75rem;">
+        <strong>{% if assignment.status == 'submitted' %}Previous feedback{% else %}Instructor feedback{% endif %}</strong>
+        <p style="margin: 0.35rem 0 0; white-space: pre-wrap;">{{ assignment.feedback }}</p>
+      </div>
+    {% endif %}
+    <p class="card-meta">
+      File:
+      <a href="{{ url_for('dc_assignment_file', assignmentid=assignment.assignmentid) }}"
+         target="_blank" rel="noopener noreferrer">{{ assignment.miniokey | attachment_name }}</a>
+    </p>
+    {% if assignment.status == 'unsatisfactory' and not user_is_dc_cohort_staff %}
+      <form method="post" enctype="multipart/form-data" style="margin-top: 1rem;">
+        <input type="hidden" name="action" value="submit_assignment">
+        <div class="form-group">
+          <label for="submission">Upload a revised file (up to 25 MB)</label>
+          <input type="file" id="submission" name="submission" required accept="{{ submission_accept }}">
+        </div>
+        <button type="submit" class="btn btn-primary">Resubmit assignment</button>
+      </form>
+    {% endif %}
   {% elif not user_is_dc_cohort_staff %}
     <p class="exit-ticket-note">
-      Upload your deliverable for this lesson. Enter a placeholder object key for now —
-      real MinIO upload is a later enhancement.
+      Upload your deliverable for this lesson (up to 25 MB). If it's marked unsatisfactory, you can upload a revised file.
     </p>
-    <form method="post">
+    <form method="post" enctype="multipart/form-data">
       <input type="hidden" name="action" value="submit_assignment">
       <div class="form-group">
-        <label for="miniokey">Submission key (placeholder)</label>
-        <input type="text" id="miniokey" name="miniokey" required
-               placeholder="submissions/student-{{ current_user['studentid'] }}/file.pdf">
+        <label for="submission">Your file</label>
+        <input type="file" id="submission" name="submission" required accept="{{ submission_accept }}">
       </div>
       <button type="submit" class="btn btn-primary">Submit assignment</button>
     </form>
@@ -94,4 +135,10 @@
     <p><a href="{{ url_for('dc_admin_grade_video', videoid=video.videoid) }}">Grade submissions for this video →</a></p>
   {% endif %}
 </section>
+{% endblock %}
+
+{% block dc_scripts %}
+{% if video.pdfkey %}
+<script src="{{ url_for('static', filename='js/dc_document_viewer.js') }}"></script>
+{% endif %}
 {% endblock %}

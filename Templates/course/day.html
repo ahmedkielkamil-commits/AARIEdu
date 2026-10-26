@@ -34,12 +34,19 @@
       <input type="hidden" name="action" value="update_assignment">
       <div class="form-group">
         <label for="assignment">What students submit for this day</label>
-        <textarea id="assignment" name="assignment" required rows="4">{{ day.assignment }}</textarea>
+        <textarea id="assignment" name="assignment" required rows="4">{{ day.assignment or '' }}</textarea>
       </div>
       <button type="submit" class="btn btn-primary btn-sm">Save exit ticket description</button>
     </form>
-    <p style="margin-top: 1rem;">
-      <a href="{{ url_for('course_week_tickets', courseid=courseid, weekid=day.weekid) }}">View exit ticket retention for this week →</a>
+    <h4 style="margin-top: 1.5rem;">
+      Submissions
+      <span class="card-meta" style="font-weight: normal; margin-left: 0.35rem;">
+        {{ day_rows | selectattr('submitted') | list | length }} / {{ day_rows | length }} submitted
+      </span>
+    </h4>
+    {% include "course/_ticket_table.html" %}
+    <p>
+      <a href="{{ url_for('course_week_tickets', courseid=courseid, weekid=day.weekid) }}">View all of Week {{ day.week_num }} →</a>
     </p>
   {% else %}
     {% if day.assignment %}
@@ -59,9 +66,13 @@
         <input type="hidden" name="action" value="submit_ticket">
         <div class="form-group">
           <label for="attachment">Submission (optional)</label>
-          <input type="file" id="attachment" name="attachment" accept="image/*,.pdf">
+          <input type="file" id="attachment" name="attachment" accept="{{ submission_accept }}">
           {% if ticket and ticket.miniokey %}
-            <p class="card-meta" style="margin-top:0.35rem;">Current attachment: {{ ticket.miniokey }}</p>
+            <p class="card-meta" style="margin-top:0.35rem;">
+              Current attachment:
+              <a href="{{ url_for('course_ticket_attachment', courseid=courseid, ticketid=ticket.ticketid) }}"
+                 target="_blank" rel="noopener noreferrer">{{ ticket.miniokey | attachment_name }}</a>
+            </p>
           {% endif %}
         </div>
         <button type="submit" class="btn btn-primary">
